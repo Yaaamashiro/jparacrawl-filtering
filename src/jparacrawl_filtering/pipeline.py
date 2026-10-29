@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .config import validate
 from .filters import FastTextLanguageID, normalize_row, rule_filter, speech_filter
-from .ranking import deduplicate, rank_candidates, select_rows
+from .ranking import deduplicate, exact_deduplicate, rank_candidates, select_rows
 from .scoring import BicleanerScorer
 from .storage import (
     StageStore,
@@ -20,11 +20,21 @@ from .storage import (
 )
 
 LOG = logging.getLogger(__name__)
-STAGES = ("normalize", "rule-filter", "speech-filter", "score", "dedup", "select", "audit", "stats")
+DATA_STAGES = (
+    "normalize",
+    "rule-filter",
+    "speech-filter",
+    "exact-dedup",
+    "score",
+    "dedup",
+    "select",
+)
+STAGES = (*DATA_STAGES, "audit", "stats")
 SETTINGS = {
     "normalize": ("input",),
     "rule-filter": ("language_id", "length", "numbers", "symbols", "navigation", "boilerplate"),
     "speech-filter": ("sentence",),
+    "exact-dedup": (),
     "scoring": ("bicleaner",),
     "score": ("bicleaner",),
     "dedup": ("one_side_dedup",),
@@ -135,13 +145,22 @@ class Pipeline:
         self.transform(speech, rules.rows(True), lambda batch: [speech_filter(r, c) for r in batch])
         if stop == "speech-filter":
             return
-        inference = self.store("scoring", speech.identity)
+        exact = self.store("exact-dedup", speech.identity)
+        if not exact.complete:
+            self.transform(
+                exact,
+                exact_deduplicate(speech.rows(True), self.scratch / "exact-dedup"),
+                lambda batch: batch,
+            )
+        if stop == "exact-dedup":
+            return
+        inference = self.store("scoring", exact.identity)
         if not inference.complete:
             self.scorer = self.scorer or BicleanerScorer(c["bicleaner"], self.scratch / "inference")
-            total = speech.counts()["accepted"]
+            total = exact.counts()["accepted"]
             started = time.monotonic()
             current = 0
-            for i, batch in enumerate(chunks(speech.rows(True), c["bicleaner"]["shard_size"])):
+            for i, batch in enumerate(chunks(exact.rows(True), c["bicleaner"]["shard_size"])):
                 if i < len(inference.manifest["parts"]):
                     continue
                 scores = self.scorer.score(batch)

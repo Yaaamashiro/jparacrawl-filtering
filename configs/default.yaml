@@ -46,7 +46,7 @@ bicleaner:
   model: bitextor/bicleaner-ai-full-en-ja
   candidate_size: 1000000
   batch_size: auto
-  device: auto  # auto, cpu, cuda; unavailable CUDA falls back to CPU.
+  device: auto  # auto: CPU fallback with warning; cuda: require GPU, stop on failure.
   shard_size: 100000
   benchmark_pairs: 100000
   threads: 4

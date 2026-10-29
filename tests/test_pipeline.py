@@ -34,6 +34,9 @@ def test_end_to_end_and_resume(prepared):
     assert stats["stages"][0]["input"] == 16
     assert sum(s["rejected"] for s in stats["stages"]) + 4 == 16
     assert stats["reject_reasons"]["not_sentence_like"] >= 1
+    assert stores["exact-dedup"].counts()["accepted"] == 6
+    assert stores["exact-dedup"].counts()["reject_reasons"] == {"duplicate_pair": 1}
+    assert stores["scoring"].counts()["input"] == 6
     assert len(list((out / "stats").glob("*.png"))) == 5
     with (out / "audit/rejected_sample.csv").open(encoding="utf-8-sig", newline="") as f:
         audit = list(csv.DictReader(f))
@@ -63,11 +66,11 @@ def test_config_changes_and_force_invalidate_descendants(prepared):
 
 def test_candidate_limit_changes_reuse_inference(prepared):
     before = run(prepared)
-    prepared["bicleaner"]["candidate_size"] = 6
+    prepared["bicleaner"]["candidate_size"] = 5
     after = run(prepared, resume=True)
     assert before["scoring"].identity == after["scoring"].identity
     assert before["score"].identity != after["score"].identity
-    assert after["score"].counts()["accepted"] == 6
+    assert after["score"].counts()["accepted"] == 5
     assert after["score"].counts()["reject_reasons"]["quality_rank"] == 1
 
 
@@ -94,6 +97,58 @@ def test_partial_scoring_resume(prepared):
         until="score"
     )
     assert first.stat().st_mtime_ns == mtime
+
+
+def test_exact_dedup_precedes_scoring_but_one_side_follows(prepared):
+    samples = json.loads((ROOT / "tests/fixtures/synthetic.json").read_text(encoding="utf-8"))
+    ja_a, ja_b = samples[0]["ja"], samples[1]["ja"]
+    en_a, en_b, en_c = (samples[i]["en"] for i in range(3))
+    pairs = [(ja_a, en_a)] * 3 + [(ja_a, en_b), (ja_b, en_c)]
+    with Path(prepared["paths"]["input"]).open("w", encoding="utf-8", newline="") as f:
+        csv.writer(f, delimiter="\t").writerows(
+            ["synthetic.invalid", "synthetic.invalid", "0.5", en, ja] for ja, en in pairs
+        )
+    prepared["bicleaner"]["candidate_size"] = 3
+    prepared["target_size"] = 2
+
+    class RecordingScorer:
+        seen = []
+
+        def score(self, rows):
+            self.seen.extend((r["ja_norm"], r["en_norm"]) for r in rows)
+            return [{en_a: 0.7, en_b: 0.99, en_c: 0.9}[r["en_norm"]] for r in rows]
+
+    scorer = RecordingScorer()
+    stores = Pipeline(prepared, lid=demo.SyntheticLanguageID(), scorer=scorer).execute()
+    assert scorer.seen == [(ja_a, en_a), (ja_a, en_b), (ja_b, en_c)]
+    assert stores["exact-dedup"].counts()["rejected"] == 2
+    assert stores["score"].counts()["accepted"] == 3
+    selected = list(stores["select"].rows(True))
+    assert {(r["ja_norm"], r["en_norm"]) for r in selected} == {(ja_a, en_b), (ja_b, en_c)}
+    assert stores["dedup"].counts()["reject_reasons"] == {"duplicate_ja": 1}
+
+
+def test_partial_exact_dedup_resume_rebuilds_seen_set(prepared, monkeypatch):
+    original = StageStore.write
+
+    def interrupted(store, index, rows):
+        if store.manifest["stage"] == "exact-dedup" and index == 1:
+            raise RuntimeError("Synthetic exact-dedup interruption")
+        return original(store, index, rows)
+
+    monkeypatch.setattr(StageStore, "write", interrupted)
+    p = Pipeline(prepared, lid=demo.SyntheticLanguageID(), scorer=demo.SyntheticScorer())
+    with pytest.raises(RuntimeError, match="exact-dedup interruption"):
+        p.execute(until="exact-dedup")
+    first = p.stores["exact-dedup"].path / "part-000000.parquet"
+    mtime = first.stat().st_mtime_ns
+    monkeypatch.setattr(StageStore, "write", original)
+    resumed = Pipeline(
+        prepared, resume=True, lid=demo.SyntheticLanguageID(), scorer=demo.SyntheticScorer()
+    ).execute(until="exact-dedup")
+    assert first.stat().st_mtime_ns == mtime
+    assert resumed["exact-dedup"].counts()["accepted"] == 6
+    assert resumed["exact-dedup"].counts()["reject_reasons"] == {"duplicate_pair": 1}
 
 
 def test_checkpoint_corruption_fails_safely(tmp_path):

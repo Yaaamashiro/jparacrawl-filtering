@@ -92,9 +92,9 @@ run_stage('download-lid')
 md(
     "## 5. CPU filtering\n実行中にGPUは不要です。完了後にランタイムをGPUへ変更してもDriveから再開できます。"
 )
-code("run_stage('run', '--resume', '--until', 'speech-filter')")
+code("run_stage('run', '--resume', '--until', 'exact-dedup')")
 md(
-    "## 6. GPU availability\nCUDA / TensorFlowはscoring子プロセスで使用します。GPUがない場合は警告してCPUへfallbackします。"
+    "## 6. GPU availability\nCUDA / TensorFlowはscoring子プロセスで使用します。configのdeviceがautoなら警告してCPUへfallbackし、cudaならGPUを必須とします。"
 )
 code("""
 from jparacrawl_filtering.scoring import cuda_available
@@ -102,10 +102,12 @@ import warnings
 if cuda_available():
     subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv'], check=True)
 else:
-    warnings.warn('GPU unavailable. Scoring will fall back to CPU and may be slow.')
+    if config['bicleaner']['device'] == 'cuda':
+        raise RuntimeError('device=cuda requires a GPU. Select a GPU runtime before scoring.')
+    warnings.warn('GPU unavailable. With device=auto, scoring falls back to CPU and may be slow.')
 """)
 md(
-    "## 7. Bicleaner-AI scoring\n100kごとにthroughput / ETAを表示。初回モデルdownloadには時間がかかります。再現実験ではREADMEのsnapshot固定手順を使ってください。"
+    "## 7. Bicleaner-AI scoring\n完全一致の正規化文対は前段で除外済みです。100kごとにthroughput / ETAを表示。初回モデルdownloadには時間がかかります。L4を必須にする場合はconfigのdeviceをcudaに設定してください。再現実験ではREADMEのsnapshot固定手順を使ってください。"
 )
 code("run_stage('score', '--resume')")
 md("## 8. Deduplication and length-aware final selection")

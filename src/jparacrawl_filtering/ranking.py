@@ -9,6 +9,29 @@ from .config import length_bin
 from .schema import reject
 
 
+def exact_deduplicate(rows, scratch):
+    """Keep the first normalized pair; leave one-sided alternatives for scoring.
+
+    The disk-backed set is rebuilt on resume while the caller replays and skips
+    already checkpointed output batches. No text hash collisions are possible.
+    """
+    p = Path(scratch) / "exact-pairs.sqlite"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.unlink(missing_ok=True)
+    db = sqlite3.connect(p)
+    try:
+        db.execute("PRAGMA cache_size=-65536")
+        db.execute("CREATE TABLE seen (ja TEXT, en TEXT, PRIMARY KEY (ja,en)) WITHOUT ROWID")
+        for row in rows:
+            inserted = db.execute(
+                "INSERT OR IGNORE INTO seen VALUES (?,?)", (row["ja_norm"], row["en_norm"])
+            ).rowcount
+            yield reject(row, [] if inserted else ["duplicate_pair"], "exact-dedup")
+    finally:
+        db.close()
+        p.unlink(missing_ok=True)
+
+
 @contextmanager
 def ranked_database(rows, scratch, bins=None):
     """SQLite bounds its cache; payloads and sort/index state spill to disk."""

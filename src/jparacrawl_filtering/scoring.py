@@ -33,6 +33,10 @@ class BicleanerScorer:
         self.scratch = Path(scratch)
         self.scratch.mkdir(parents=True, exist_ok=True)
         self.device = "cuda" if config["device"] != "cpu" and cuda_available() else "cpu"
+        if config["device"] == "cuda" and self.device != "cuda":
+            raise RuntimeError(
+                "device=cuda requested but CUDA is unavailable; CPU fallback is disabled"
+            )
         if self.device == "cpu" and config["device"] != "cpu":
             LOG.warning("CUDA unavailable; using Bicleaner CPU fallback")
         self.batch_size = (
@@ -122,11 +126,16 @@ class BicleanerScorer:
                     self.batch_size = max(1, self.batch_size // 2)
                     LOG.warning("Bicleaner memory retry: batch_size=%d", self.batch_size)
                     continue
-                if self.device == "cuda":
+                if self.device == "cuda" and self.c["device"] == "auto":
                     self.device = "cpu"
                     self.batch_size = min(self.batch_size, 8)
                     LOG.warning("Bicleaner GPU execution failed; retrying on CPU")
                     continue
+                if self.device == "cuda":
+                    raise RuntimeError(
+                        f"Bicleaner GPU execution failed (exit={proc.returncode}); "
+                        "device=cuda disables CPU fallback"
+                    )
                 raise RuntimeError(
                     f"Bicleaner failed (exit={proc.returncode}); check model/dependency installation"
                 )

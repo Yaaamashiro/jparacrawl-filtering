@@ -52,6 +52,67 @@ def test_oom_retries_then_cpu_fallback(config, tmp_path, monkeypatch):
     assert scorer.device == "cpu"
 
 
+def test_explicit_cuda_without_gpu_stops(config, tmp_path, monkeypatch):
+    config["bicleaner"]["device"] = "cuda"
+    monkeypatch.setattr("jparacrawl_filtering.scoring.cuda_available", lambda: False)
+    with pytest.raises(RuntimeError, match="device=cuda requested"):
+        BicleanerScorer(config["bicleaner"], tmp_path)
+
+
+def test_auto_without_gpu_warns_and_uses_cpu(config, tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr("jparacrawl_filtering.scoring.cuda_available", lambda: False)
+    scorer = BicleanerScorer(config["bicleaner"], tmp_path)
+    assert scorer.device == "cpu"
+    assert "CPU fallback" in caplog.text
+
+
+@pytest.mark.parametrize("oom", [False, True])
+def test_explicit_cuda_failure_never_runs_cpu(config, tmp_path, monkeypatch, oom):
+    config["bicleaner"]["device"] = "cuda"
+    monkeypatch.setattr("jparacrawl_filtering.scoring.cuda_available", lambda: True)
+    monkeypatch.setattr(
+        "jparacrawl_filtering.scoring.shutil.which", lambda _: "bicleaner-ai-classify"
+    )
+    calls = []
+
+    def cli(command, **kw):
+        assert "--require_gpu" in command
+        calls.append(int(command[command.index("--batch_size") + 1]))
+        error = "ResourceExhausted: out of memory" if oom else "Synthetic model failure"
+        return subprocess.CompletedProcess(command, 1, "", error)
+
+    monkeypatch.setattr("jparacrawl_filtering.scoring.subprocess.run", cli)
+    scorer = BicleanerScorer(config["bicleaner"], tmp_path)
+    with pytest.raises(RuntimeError, match="device=cuda disables CPU fallback"):
+        scorer.score([{"en_norm": "English.", "ja_norm": "日本語。"}])
+    assert calls == ([32, 16, 8, 4, 2, 1] if oom else [32])
+    assert scorer.device == "cuda"
+    assert not list(tmp_path.glob("inference-*"))
+
+
+def test_auto_non_oom_gpu_failure_warns_and_retries_cpu(config, tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr("jparacrawl_filtering.scoring.cuda_available", lambda: True)
+    monkeypatch.setattr(
+        "jparacrawl_filtering.scoring.shutil.which", lambda _: "bicleaner-ai-classify"
+    )
+    calls = []
+
+    def cli(command, **kw):
+        gpu = "--require_gpu" in command
+        calls.append(gpu)
+        if gpu:
+            return subprocess.CompletedProcess(command, 1, "", "Synthetic GPU failure")
+        assert kw["env"]["CUDA_VISIBLE_DEVICES"] == "-1"
+        Path(command[2]).write_text("0.9\n", encoding="utf-8")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr("jparacrawl_filtering.scoring.subprocess.run", cli)
+    scorer = BicleanerScorer(config["bicleaner"], tmp_path)
+    assert scorer.score([{"en_norm": "English.", "ja_norm": "日本語。"}]) == [0.9]
+    assert calls == [True, False]
+    assert "retrying on CPU" in caplog.text
+
+
 @pytest.mark.parametrize("output", ["nan\n", "1.1\n", "bad\n", "", "0.5\n0.6\n"])
 def test_bad_scores_rejected(config, tmp_path, monkeypatch, output):
     config["bicleaner"]["device"] = "cpu"

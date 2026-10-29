@@ -3,7 +3,12 @@ from copy import deepcopy
 import pytest
 
 from jparacrawl_filtering.config import validate
-from jparacrawl_filtering.ranking import deduplicate, rank_candidates, select_rows
+from jparacrawl_filtering.ranking import (
+    deduplicate,
+    exact_deduplicate,
+    rank_candidates,
+    select_rows,
+)
 
 
 def make(i, ja=None, en=None, length=40, score=None):
@@ -36,6 +41,23 @@ def test_dedup_ranks_and_reasons(tmp_path):
     assert "duplicate_ja" in result[1]["reject_reason"]
     assert "duplicate_en" in result[2]["reject_reason"]
     assert sum(r["accepted"] for r in deduplicate(rows, False, tmp_path)) == 4
+
+
+def test_exact_dedup_preserves_first_pair_and_one_sided_alternatives(tmp_path):
+    rows = [
+        make(1, "同じ文。", "First."),
+        make(2, "同じ文。", "First."),
+        make(3, "同じ文。", "Second."),
+        make(4, "別の文。", "First."),
+    ]
+    rows[1]["ja_raw"] = "  同じ文。  "
+    result = list(exact_deduplicate(iter(rows), tmp_path))
+    assert [r["pair_id"] for r in result if r["accepted"]] == ["p000001", "p000003", "p000004"]
+    assert result[1]["reject_reason"] == "duplicate_pair"
+    assert result[1]["first_reject_stage"] == "exact-dedup"
+    assert result[1]["ja_raw"] == "  同じ文。  "
+    assert all(r["stage"] == "exact-dedup" for r in result)
+    assert not (tmp_path / "exact-pairs.sqlite").exists()
 
 
 def test_candidate_ranking_deterministic_ties(tmp_path):

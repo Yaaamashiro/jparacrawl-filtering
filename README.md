@@ -9,8 +9,9 @@ JParaCrawl v3 (TSV / TSV.gz, column mapping)
   → Stage 0 normalize + input validation             CPU
   → Stage 1 language / noise / number / length rules CPU
   → Stage 2 sentence-like / speech suitability       CPU
+  → Stage 2b exact normalized pair dedup             CPU
   → Stage 3 Bicleaner-AI → top 1,000,000              GPU or CPU
-  → Stage 4 quality-first exact / one-side dedup     CPU
+  → Stage 4 quality-first one-side dedup             CPU
   → Stage 5 length-bin quotas + deficit refill      CPU
   → Stage 6 random manual audit (500 / 200)          CPU
   → Stage 7 statistics + five figures               CPU
@@ -121,7 +122,7 @@ uv run python -m jparacrawl_filtering download-lid --config configs/default.yaml
 | `bicleaner.candidate_size` | 1,000,000、thresholdではなく降順ranking |
 | `bicleaner.batch_size` | auto、GPU32 / CPU8から開始しOOMで半減 |
 | `bicleaner.shard_size` | 100,000、切断時の推論再計算単位 |
-| `bicleaner.device` | auto、GPU失敗時はCPU fallback |
+| `bicleaner.device` | autoは警告付きCPU fallback、cudaはGPU必須・失敗時停止 |
 | `one_side_dedup` | true、exact pair dedupは常時有効 |
 | `training_text` | normalized、rawも選べる |
 | `audit` | accepted 500 / rejected 200 |
@@ -143,7 +144,7 @@ uv run python -m jparacrawl_filtering stats --config configs/default.yaml --resu
 uv run python -m jparacrawl_filtering run --config configs/default.yaml --resume --force speech-filter
 ```
 
-stage名: `normalize`, `rule-filter`, `speech-filter`, `score`, `dedup`, `select`, `audit`, `stats`。stage単体コマンドも必要な前段の整合性を確認し、未実行・変更された前段を処理します。`--resume` で有効な前段はskipします。statsはauditも生成します。`--force` はstage名を取り、複数回指定できます。
+stage名: `normalize`, `rule-filter`, `speech-filter`, `exact-dedup`, `score`, `dedup`, `select`, `audit`, `stats`。stage単体コマンドも必要な前段の整合性を確認し、未実行・変更された前段を処理します。`--resume` で有効な前段はskipします。statsはauditも生成します。`--force` はstage名を取り、複数回指定できます。
 
 ## Resume behavior
 
@@ -154,6 +155,7 @@ stage名: `normalize`, `rule-filter`, `speech-filter`, `score`, `dedup`, `select
 - `--force speech-filter --resume` はspeech-filterを再計算し、その子孫も再計算します。normalizeとrulesは再利用します。
 - CPU変換・推論はshard単位に再開。gzip入力は先頭から読み直して完了済み区間を飛ばすため、読み取り時間はかかります。
 - 全体rankingのSQLite索引とquota計算は切断後に再構築します。保存済みの推論は繰り返しません。
+- `exact-dedup` は途中再開時に入力を先頭からstreamし、SQLiteの既出集合を再構築します。保存済みParquet shardは検証して再利用します。
 - 破損checkpointは黙ってskipせず停止します。該当stageをforceしてください。
 - work_dir内のOS lockで同時書き込みを拒否します。lock非対応のマウントでは停止します。Driveを複数Colabから同時操作しないでください。
 - Driveクライアントへの書込完了とクラウド同期完了は別です。ランタイムを意図的に終了する前にDrive同期を待ってください。
@@ -166,6 +168,7 @@ work_dir/
     normalize/<generation>/part-*.parquet
     rule-filter/<generation>/part-*.parquet
     speech-filter/<generation>/part-*.parquet
+    exact-dedup/<generation>/part-*.parquet # 正規化後の完全重複を推論前に除外
     scoring/<generation>/part-*.parquet     # 推論全結果の再開用
     score/<generation>/part-*.parquet       # top candidates + quality_rank rejects
     dedup/<generation>/part-*.parquet
@@ -199,7 +202,8 @@ work_dir/
 - 箇条書きはrawの改行を保持した段階でfeature化。`- Item` は箇条書き、ハイフン直後に空白がない語と区別します。先頭 `- ` の引用会話も落ち得るPrecision重視のルールです。
 - 日英の終止符と閉じ括弧・引用符を確認。
 - 数字はArabic numeralをdecimalに揃えて多重集合で比較。片側の数字欠落はdefaultで不問です。漢数字・数詞・日付書式・単位変換の完全対応はしません。
-- dedupはscore順で貪欲に採用。日本語または英語が既採用なら除外します。最大二部matchingではありません。
+- `exact-dedup` は正規化後の `(ja_norm, en_norm)` が完全一致する文対だけを推論前に除外し、入力順で最初の文対を残します。rawだけが異なる場合も、同じ推論用テキストなら重複扱いです。片側だけ一致する別訳は残します。
+- Bicleaner後の `dedup` はscore順で貪欲に採用。日本語または英語が既採用なら除外します。最大二部matchingではありません。完全重複を前段で除くため、同じ文対がquality candidate枠を浪費しません。
 
 `reject_reason` はsemicolon区切りで複数保存します。`lang_mismatch`, `lang_low_confidence`, `too_short`, `too_long`, `url`, `email`, `html`, `file_path`, `navigation`, `boilerplate`, `code_like`, `formula_like`, `symbol_ratio`, `bullet_like`, `numeric_mismatch`, `not_sentence_like`, `duplicate_pair`, `duplicate_ja`, `duplicate_en` に加え、`empty_text`, `length_ratio`, `quality_rank`, `length_quota` を使用します。
 
@@ -207,7 +211,9 @@ work_dir/
 
 モデルは [`bitextor/bicleaner-ai-full-en-ja`](https://huggingface.co/bitextor/bicleaner-ai-full-en-ja)。[公式CLI](https://github.com/bitextor/bicleaner-ai)へ **English→Japanese** の順で渡し、`--score_only --disable_hardrules` で確率を受け取ります。独自ルールとBicleaner hardrulesの混同を避け、KenLM / Hunspellの追加導入を不要にしています。
 
-子プロセスでのみTensorFlowを使用します。GPUはnvidia-smiで事前確認し、実行時にも `--require_gpu` を要求します。GPU失敗はCPUで再試行。OOMはbatch sizeを半分にし、1でもGPUが失敗すればCPUへ移ります。autoは安全な初期値からの縮小のみで、VRAMを埋めるための増加探索はしません。100k行ごとにthroughput・残り件数に基づくETAを記録します。モデル読込時間もthroughputに含みます。
+子プロセスでのみTensorFlowを使用します。GPUはnvidia-smiで事前確認し、GPU実行時には公式CLIの `--require_gpu` でTensorFlowからの利用可否も確認します。`device: cuda` はGPUが未検出ならRuntimeErrorで停止し、GPU実行が失敗した場合もCPUへ切り替えません。`device: auto` はGPU未検出・GPU実行失敗を警告し、CPUで再試行します。`device: cpu` は初めからCPUで実行します。
+
+OOMはGPU上でbatch sizeを半分にして再試行します。1でも失敗した場合、cudaは停止、autoは警告してCPUへ移ります。auto batch sizeは安全な初期値からの縮小のみで、VRAMを埋めるための増加探索はしません。100k行ごとにthroughput・残り件数に基づくETAを記録します。モデル読込時間もthroughputに含みます。L4の使用を必須にする実験では `--device cuda` を指定してください。
 
 100k shardごとにモデルを子プロセスで読み直すためロード費用が発生します。`shard_size` を増やすと効率が改善する場合がありますが、切断時の再計算範囲とテキスト保持量も増えます。自動的なCPU fallbackは遅くなるため、ログのdeviceを確認してください。
 

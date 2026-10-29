@@ -5,7 +5,7 @@ import random
 from collections import Counter
 from pathlib import Path
 
-from .pipeline import STAGES
+from .pipeline import DATA_STAGES
 from .storage import atomic_json, file_hash, read_json
 
 
@@ -37,7 +37,7 @@ def export_selected(pipeline):
 
 
 def rejected_rows(pipeline):
-    for name in STAGES[:6]:
+    for name in DATA_STAGES:
         for row in pipeline.stores[name].rows():
             if not row["accepted"]:
                 yield row
@@ -73,7 +73,7 @@ def export_state(pipeline, name, settings):
     out = pipeline.root / "outputs" / name
     out.mkdir(parents=True, exist_ok=True)
     signature = digest(
-        {"settings": settings, "upstream": {n: pipeline.stores[n].identity for n in STAGES[:6]}}
+        {"settings": settings, "upstream": {n: pipeline.stores[n].identity for n in DATA_STAGES}}
     )
     manifest = out / "manifest.json"
     if manifest.exists() and name not in pipeline.force:
@@ -145,7 +145,7 @@ def statistics(pipeline):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    stages = [pipeline.stores[n].counts() for n in STAGES[:6]]
+    stages = [pipeline.stores[n].counts() for n in DATA_STAGES]
     reasons = Counter()
     for s in stages:
         reasons.update(s["reject_reasons"])
