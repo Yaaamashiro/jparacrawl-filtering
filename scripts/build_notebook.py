@@ -1,0 +1,156 @@
+"""Regenerate the output-free Colab notebook from reviewable Python cell sources."""
+
+from pathlib import Path
+
+import nbformat as nbf
+
+ROOT = Path(__file__).resolve().parents[1]
+cells = []
+
+
+def md(text):
+    cells.append(nbf.v4.new_markdown_cell(text))
+
+
+def code(text):
+    cells.append(nbf.v4.new_code_cell(text.strip()))
+
+
+md("""# JParaCrawl filtering for Direct S2ST
+
+Python 3.11+ / Google Drive / optional NVIDIA L4. 原データの利用条件を公式ページで確認し、Driveへ展開してください。
+このNotebookは実文の出力を保存しません。切断後は同じconfigとDriveから `--resume` で再開します。
+clone先は `Yaaamashiro/jparacrawl-filtering` に設定済みです。
+""")
+md("## 1. Google Drive mount")
+code("""
+from google.colab import drive
+drive.mount('/content/drive')
+""")
+md("## 2. Repository clone")
+code("""
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+REPO_URL = 'https://github.com/Yaaamashiro/jparacrawl-filtering.git'
+REPO_REF = ''  # Optional commit SHA or tag for reproducibility.
+REPO_DIR = Path('/content/jparacrawl-filtering')
+if not REPO_URL:
+    raise ValueError('Set REPO_URL to the published repository URL before running.')
+if not REPO_DIR.exists():
+    subprocess.run(['git', 'clone', REPO_URL, str(REPO_DIR)], check=True)
+else:
+    origin = subprocess.check_output(['git', '-C', str(REPO_DIR), 'remote', 'get-url', 'origin'], text=True).strip()
+    if origin != REPO_URL:
+        raise ValueError('Existing checkout has a different remote; choose another REPO_DIR.')
+if REPO_REF:
+    subprocess.run(['git', '-C', str(REPO_DIR), 'checkout', REPO_REF], check=True)
+os.chdir(REPO_DIR)
+print('Python:', sys.version.split()[0])
+print('Commit:', subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip())
+""")
+md(
+    "## 3. Dependency installation (uv with pip fallback)\n依存導入後にimportエラーが出る場合、Pythonセッションを再起動してmountから再実行してください。"
+)
+code("""
+USE_CUDA_DEPS = False  # True: install bicleaner-ai[and-cuda] rather than using Colab CUDA.
+extras = 'lid,cuda' if USE_CUDA_DEPS else 'lid,scoring'
+try:
+    subprocess.run([sys.executable, '-m', 'pip', 'install', 'uv'], check=True)
+    subprocess.run([sys.executable, '-m', 'uv', 'pip', 'install', '--system',
+                    '--python', sys.executable, '-e', f'.[{extras}]'], check=True)
+except (OSError, subprocess.CalledProcessError):
+    subprocess.run([sys.executable, '-m', 'pip', 'install', '-e', f'.[{extras}]'], check=True)
+""")
+md(
+    "## 4. Config verification / language model\n既存のDrive configは上書きしません。設定変更は下のセルかDrive上のYAMLで行ってください。"
+)
+code("""
+import yaml
+WORK = Path('/content/drive/MyDrive/jparacrawl-filtering')
+CONFIG = WORK / 'config.yaml'
+INPUT = Path('/content/drive/MyDrive/jparacrawl/v3/en-ja/en-ja.bicleaner05.txt')
+WORK.mkdir(parents=True, exist_ok=True)
+if not CONFIG.exists():
+    config = yaml.safe_load(Path('configs/default.yaml').read_text())
+    config['paths'].update(input=str(INPUT), work_dir=str(WORK),
+                           scratch_dir='/content/jparacrawl-filtering-scratch')
+    config['language_id']['model_path'] = str(WORK / 'models/lid.176.ftz')
+    CONFIG.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False))
+config = yaml.safe_load(CONFIG.read_text())
+print(yaml.safe_dump(config, allow_unicode=True, sort_keys=False))
+def run_stage(stage, *options):
+    subprocess.run([sys.executable, '-m', 'jparacrawl_filtering', stage,
+                    '--config', str(CONFIG), *options], check=True)
+run_stage('validate-config')
+if not Path(config['paths']['input']).is_file():
+    raise FileNotFoundError('Prepare the extracted JParaCrawl TSV on Drive first.')
+run_stage('download-lid')
+""")
+md(
+    "## 5. CPU filtering\n実行中にGPUは不要です。完了後にランタイムをGPUへ変更してもDriveから再開できます。"
+)
+code("run_stage('run', '--resume', '--until', 'speech-filter')")
+md(
+    "## 6. GPU availability\nCUDA / TensorFlowはscoring子プロセスで使用します。GPUがない場合は警告してCPUへfallbackします。"
+)
+code("""
+from jparacrawl_filtering.scoring import cuda_available
+import warnings
+if cuda_available():
+    subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv'], check=True)
+else:
+    warnings.warn('GPU unavailable. Scoring will fall back to CPU and may be slow.')
+""")
+md(
+    "## 7. Bicleaner-AI scoring\n100kごとにthroughput / ETAを表示。初回モデルdownloadには時間がかかります。再現実験ではREADMEのsnapshot固定手順を使ってください。"
+)
+code("run_stage('score', '--resume')")
+md("## 8. Deduplication and length-aware final selection")
+code("""
+run_stage('select', '--resume')
+# target_size is saved in the Drive config; changing it preserves inference shards.
+""")
+md(
+    "## 9. Manual audit\n採用500件・不採用200件をDriveへ保存します。原文はNotebook出力に表示しません。"
+)
+code("""
+run_stage('audit', '--resume')
+print('Review:', Path(config['paths']['work_dir']) / 'outputs/audit')
+""")
+md("## 10. Statistics and figures")
+code("""
+run_stage('stats', '--resume')
+import json
+from IPython.display import Image, display
+STATS = Path(config['paths']['work_dir']) / 'outputs/stats'
+summary = json.loads((STATS / 'stats.json').read_text())
+print(json.dumps({'stages': summary['stages'], 'shortfall': summary['shortfall']}, indent=2))
+for name in ['ja_length.png', 'en_words.png', 'bicleaner_scores.png',
+             'selected_vs_rejected.png', 'reject_reasons.png']:
+    display(Image(filename=str(STATS / name)))
+""")
+md("""## Reconnect / rerun
+同じDriveをmountしてconfigを再利用してください。完了stageと完了shardは検証後skipされます。
+`--force speech-filter --resume` で該当stageと後続を再計算できます。
+同じwork_dirへ複数ランタイムから同時書込しないでください。
+公開前に **Edit → Clear all outputs** を実行してください。データ・監査CSVをGitへ追加しないでください。
+""")
+
+for i, cell in enumerate(cells):
+    cell["id"] = f"cell-{i:02d}"
+
+nb = nbf.v4.new_notebook(
+    cells=cells,
+    metadata={
+        "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+        "language_info": {"name": "python", "version": "3.11"},
+        "colab": {"provenance": []},
+    },
+)
+dest = ROOT / "notebooks/jparacrawl_filtering_colab.ipynb"
+dest.parent.mkdir(parents=True, exist_ok=True)
+nbf.write(nb, dest)
+print(dest)

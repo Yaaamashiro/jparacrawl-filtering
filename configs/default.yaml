@@ -1,0 +1,67 @@
+seed: 42
+target_size: 300000
+batch_size: 10000
+paths:
+  input: /content/drive/MyDrive/jparacrawl/v3/en-ja/en-ja.bicleaner05.txt
+  work_dir: /content/drive/MyDrive/jparacrawl-filtering
+  # Disposable SQLite sorting state may be kept on Colab's local disk for speed.
+  # Persistent Parquet checkpoints and exports ALWAYS live under work_dir.
+  scratch_dir: /content/jparacrawl-filtering-scratch
+input:
+  # Zero-based, no header: domain_en, domain_ja, original_score, en, ja.
+  columns: {ja: 4, en: 3}
+  expected_columns: 5
+  header: false
+  delimiter: "\t"
+  quoting: false
+  sha256: null  # Optional known input checksum, verified before processing.
+language_id:
+  model_path: /content/drive/MyDrive/jparacrawl-filtering/models/lid.176.ftz
+  min_confidence: 0.8
+length:
+  min_ja_chars: 4
+  max_ja_chars: 300
+  min_en_words: 2
+  max_en_words: 150
+  min_char_ratio: 0.05
+  max_char_ratio: 5.0
+numbers:
+  enabled: true
+  # Reject only when BOTH sides have digits and their normalized multisets differ.
+  require_both_sides: true
+symbols:
+  max_weird_symbol_ratio: 0.10
+navigation:
+  min_separators: 2
+  min_density: 0.02
+boilerplate:
+  max_ja_chars: 40
+  max_en_words: 8
+  keywords: [Copyright, All rights reserved, Privacy Policy, Terms of Service,
+    Terms of Use, Site Map, Sitemap, 著作権, 無断転載, プライバシーポリシー, 利用規約, サイトマップ]
+sentence:
+  require_terminal_punctuation: true
+  reject_bullets: true
+bicleaner:
+  model: bitextor/bicleaner-ai-full-en-ja
+  candidate_size: 1000000
+  batch_size: auto
+  device: auto  # auto, cpu, cuda; unavailable CUDA falls back to CPU.
+  shard_size: 100000
+  benchmark_pairs: 100000
+  threads: 4
+  timeout_seconds: 14400
+  executable: bicleaner-ai-classify
+  offline: false
+  calibrated: false
+one_side_dedup: true
+training_text: normalized  # normalized or raw; features retain both.
+audit:
+  accepted_samples: 500
+  rejected_samples: 200
+length_bins:
+  - {min: 0, max: 9, ratio: 0.02}
+  - {min: 10, max: 29, ratio: 0.15}
+  - {min: 30, max: 59, ratio: 0.40}
+  - {min: 60, max: 99, ratio: 0.33}
+  - {min: 100, max: null, ratio: 0.10}
