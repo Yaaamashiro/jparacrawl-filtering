@@ -18,7 +18,8 @@ def code(text):
 
 md("""# JParaCrawl filtering for Direct S2ST
 
-Python 3.11+ / Google Drive / optional NVIDIA L4. 原データの利用条件を公式ページで確認し、Driveへ展開してください。
+NotebookカーネルはPython 3.13でも使用できます。処理用Python 3.11は独立環境へ自動導入します。
+Google Drive / optional NVIDIA L4. 原データの利用条件を公式ページで確認し、Driveへ展開してください。
 このNotebookは実文の出力を保存しません。切断後は同じconfigとDriveから `--resume` で再開します。
 clone先は `Yaaamashiro/jparacrawl-filtering` に設定済みです。
 """)
@@ -45,6 +46,8 @@ else:
     origin = subprocess.check_output(['git', '-C', str(REPO_DIR), 'remote', 'get-url', 'origin'], text=True).strip()
     if origin != REPO_URL:
         raise ValueError('Existing checkout has a different remote; choose another REPO_DIR.')
+    if not REPO_REF:
+        subprocess.run(['git', '-C', str(REPO_DIR), 'pull', '--ff-only'], check=True)
 if REPO_REF:
     subprocess.run(['git', '-C', str(REPO_DIR), 'checkout', REPO_REF], check=True)
 os.chdir(REPO_DIR)
@@ -52,38 +55,39 @@ print('Python:', sys.version.split()[0])
 print('Commit:', subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip())
 """)
 md(
-    "## 3. Dependency installation (uv with pip fallback)\n依存導入後にimportエラーが出る場合、Pythonセッションを再起動してmountから再実行してください。"
+    "## 3. Worker environment (Python 3.11 / uv with pip fallback)\nカーネルのPythonを変更せず、NumPy<2が必要なBicleanerとfastTextを独立環境へ導入します。pip fallbackも同じ処理用環境で実行します。"
 )
 code("""
 USE_CUDA_DEPS = False  # True: install bicleaner-ai[and-cuda] rather than using Colab CUDA.
 extras = 'lid,cuda' if USE_CUDA_DEPS else 'lid,scoring'
-try:
-    subprocess.run([sys.executable, '-m', 'pip', 'install', 'uv'], check=True)
-    subprocess.run([sys.executable, '-m', 'uv', 'pip', 'install', '--system',
-                    '--python', sys.executable, '-e', f'.[{extras}]'], check=True)
-except (OSError, subprocess.CalledProcessError):
-    subprocess.run([sys.executable, '-m', 'pip', 'install', '-e', f'.[{extras}]'], check=True)
+subprocess.run([sys.executable, 'scripts/bootstrap_colab.py', '--extras', extras], check=True)
+import json
+runtime = json.loads((REPO_DIR / '.work/colab_environment.json').read_text())
+PIPELINE_PYTHON = runtime['python']
+# Only subprocesses use the worker environment; the notebook kernel stays intact.
+WORKER_ENV = os.environ.copy()
+for key in ('PYTHONPATH', 'PYTHONHOME', 'VIRTUAL_ENV'):
+    WORKER_ENV.pop(key, None)
+WORKER_ENV['PATH'] = str(Path(PIPELINE_PYTHON).parent) + os.pathsep + WORKER_ENV.get('PATH', '')
+print('Notebook kernel:', sys.version.split()[0])
+print('Pipeline worker:', runtime['version'], PIPELINE_PYTHON)
 """)
 md(
     "## 4. Config verification / language model\n既存のDrive configは上書きしません。設定変更は下のセルかDrive上のYAMLで行ってください。"
 )
 code("""
-import yaml
 WORK = Path('/content/drive/MyDrive/jparacrawl-filtering')
 CONFIG = WORK / 'config.yaml'
 INPUT = Path('/content/drive/MyDrive/jparacrawl/v3/en-ja/en-ja.bicleaner05.txt')
-WORK.mkdir(parents=True, exist_ok=True)
-if not CONFIG.exists():
-    config = yaml.safe_load(Path('configs/default.yaml').read_text())
-    config['paths'].update(input=str(INPUT), work_dir=str(WORK),
-                           scratch_dir='/content/jparacrawl-filtering-scratch')
-    config['language_id']['model_path'] = str(WORK / 'models/lid.176.ftz')
-    CONFIG.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False))
-config = yaml.safe_load(CONFIG.read_text())
-print(yaml.safe_dump(config, allow_unicode=True, sort_keys=False))
+config = json.loads(subprocess.check_output([
+    PIPELINE_PYTHON, 'scripts/prepare_colab_config.py',
+    '--defaults', 'configs/default.yaml', '--config', str(CONFIG),
+    '--input', str(INPUT), '--work-dir', str(WORK),
+], text=True, env=WORKER_ENV))
+print(CONFIG.read_text())
 def run_stage(stage, *options):
-    subprocess.run([sys.executable, '-m', 'jparacrawl_filtering', stage,
-                    '--config', str(CONFIG), *options], check=True)
+    subprocess.run([PIPELINE_PYTHON, '-m', 'jparacrawl_filtering', stage,
+                    '--config', str(CONFIG), *options], check=True, env=WORKER_ENV)
 run_stage('validate-config')
 if not Path(config['paths']['input']).is_file():
     raise FileNotFoundError('Prepare the extracted JParaCrawl TSV on Drive first.')
@@ -97,9 +101,12 @@ md(
     "## 6. GPU availability\nCUDA / TensorFlowはscoring子プロセスで使用します。configのdeviceがautoなら警告してCPUへfallbackし、cudaならGPUを必須とします。"
 )
 code("""
-from jparacrawl_filtering.scoring import cuda_available
 import warnings
-if cuda_available():
+gpu_available = json.loads(subprocess.check_output([
+    PIPELINE_PYTHON, '-c',
+    'import json; from jparacrawl_filtering.scoring import cuda_available; print(json.dumps(cuda_available()))',
+], text=True, env=WORKER_ENV))
+if gpu_available:
     subprocess.run(['nvidia-smi', '--query-gpu=name,memory.total', '--format=csv'], check=True)
 else:
     if config['bicleaner']['device'] == 'cuda':

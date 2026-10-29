@@ -4,8 +4,10 @@
 
 | 確認 | 結果 |
 | --- | --- |
-| Python 3.11環境 | uv.lockから独立した環境を作成し、pytest 52件成功 |
-| Python 3.12環境 | pip editable install、pytest 52件成功 |
+| Python 3.11環境 | uv.lockから独立した環境を作成し、pytest 58件成功 |
+| Python 3.12環境 | pip editable install、pytest 58件成功 |
+| Python 3.13のホスト | WindowsのPython 3.13.14からbootstrapを実行し、ロック済みCPU依存をPython 3.11.18の独立環境へ導入。3.13へ本体依存を導入せず実行できることを確認 |
+| Notebook環境分離 | stage CLI・config処理・GPU確認を処理用Pythonへ渡すこと、カーネルから本体やYAML等をimportしないこと、pip fallbackも対応版の処理環境へ限定することをテスト |
 | 合成データ全工程 | normalize → rule → speech → exact pair dedup → score double → one-side dedup → select → audit → statsが完了 |
 | Resume | 完了generationと推論途中のshardを再利用、出力同一性を確認 |
 | 設定変更 / force | target・candidate変更で推論再利用、前stageのforceで子孫を更新 |

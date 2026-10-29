@@ -67,6 +67,10 @@ python -m pip install -e '.[lid,scoring,dev]'  # Linux / Colab
 
 切断後は同じDrive・configでセルを再実行します。コマンドには `--resume` を付けています。Drive上にParquetとmanifestが残り、ColabローカルのSQLite scratchは再構築できます。CPU工程の後でGPUランタイムへ変更しても再開できます。依存を入れ直したときは、必要に応じてColabのPythonセッションを再起動してください。
 
+ColabのカーネルがPython 3.13でも、セル3が `scripts/bootstrap_colab.py` で処理用のPython 3.11環境を `.work/colab-venv` に作成します。以後の処理とBicleaner CLIはその環境で実行し、Drive mount・表示は元のカーネルで行います。uvによるPython取得・lock済み依存導入を基本とし、pip fallbackも対応バージョンの処理用環境へ限定します。カーネルのPythonやNumPyを上書きしません。`REPO_REF` 未指定ならセル2で既存checkoutを `git pull --ff-only` により更新します。旧Notebookで導入に失敗した場合は最新版を開き直し、セル2以降を再実行してください。
+
+Python 3.13へ処理まで統一しない理由は、[Bicleaner-AI 3.6の配布依存](https://pypi.org/pypi/bicleaner-ai/3.6/json)が `numpy<2` を要求し、[NumPy 1.26の公式対応範囲](https://numpy.org/doc/stable/release/1.26.4-notes.html)がPython 3.9–3.12のためです。Python上限を外すだけでは解決しません。
+
 ## JParaCrawl preparation
 
 [NTT公式JParaCrawlページ](https://www.kecl.ntt.co.jp/icl/lirg/jparacrawl/)から **English-Japanese training set v3.0** を利用者自身で取得し、Driveへ展開してください。入力にtar.gz自体を指定しないでください。展開した `en-ja/en-ja.bicleaner05.txt`、またはそのファイルを単体gzip化したものを読みます。
