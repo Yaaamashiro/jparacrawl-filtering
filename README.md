@@ -63,9 +63,51 @@ python -m pip install -e '.[lid,scoring,dev]'  # Linux / Colab
 
 ## Google Colab usage
 
-[`notebooks/jparacrawl_filtering_colab.ipynb`](notebooks/jparacrawl_filtering_colab.ipynb) を[Colabで開きます](https://colab.research.google.com/github/Yaaamashiro/jparacrawl-filtering/blob/main/notebooks/jparacrawl_filtering_colab.ipynb)。clone先URLは設定済みです。NotebookにはDrive mount → clone → uvまたはpip導入 → config生成 → CPU工程 → GPU確認 → scoring → selection → audit → reportの順でセルがあります。
+[`notebooks/jparacrawl_filtering_colab.ipynb`](notebooks/jparacrawl_filtering_colab.ipynb) を[Colabで開きます](https://colab.research.google.com/github/Yaaamashiro/jparacrawl-filtering/blob/main/notebooks/jparacrawl_filtering_colab.ipynb)。clone先URLは設定済みです。冒頭のセル0で `RUN_MODE = 'smoke'` または `'production'` を選びます。デフォルトはsmokeで、それ以外の文字列は即座にエラーになります。
 
-切断後は同じDrive・configでセルを再実行します。コマンドには `--resume` を付けています。Drive上にParquetとmanifestが残り、ColabローカルのSQLite scratchは再構築できます。CPU工程の後でGPUランタイムへ変更しても再開できます。依存を入れ直したときは、必要に応じてColabのPythonセッションを再起動してください。
+| 設定 | production | smoke |
+| --- | --- | --- |
+| config | `/content/drive/MyDrive/jparacrawl-filtering/config.yaml` | `/content/jparacrawl-filtering/configs/smoke.yaml` |
+| input | `/content/drive/MyDrive/jparacrawl/v3/en-ja/en-ja.bicleaner05.txt` | `/content/drive/MyDrive/jparacrawl/smoke/en-ja-smoke.txt` |
+| work_dir | `/content/drive/MyDrive/jparacrawl-filtering` | `/content/drive/MyDrive/jparacrawl-filtering-smoke` |
+| scratch_dir | `/content/jparacrawl-filtering-scratch` | `/content/jparacrawl-filtering-smoke-scratch` |
+| target_size（新規設定） | 300,000 | 5,000 |
+| candidate_size（新規設定） | 1,000,000 | 10,000 |
+| shard_size（新規設定） | 100,000 | 5,000 |
+
+**既存のconfigは上書きしません。** 新規production configは `device: cuda`、`batch_size: auto`、モデル `bitextor/bicleaner-ai-full-en-ja`、`benchmark_pairs: 100000` で作成します。既存の本番configがautoの場合も保存内容は保持し、cudaの推奨を表示します。研究再現runでは、本番configを利用者が明示的に `device: cuda` にしてください。
+
+configのinput / work_dir / scratch_dirとconfig自身のパスは、モードごとの上記パスと照合します。symlinkを解決した実パスで検査し、smokeから本番inputへの取り違え、本番からsmoke work_dirへの取り違え、出力ディレクトリの重なりを拒否します。モードを変更したらセル4のconfig選択もやり直してください。各stage起動時にはconfigを読み直すため、古いNotebook変数の内容では実行しません。
+
+### CPU filtering（GPU不要）
+
+1. セル0で `RUN_MODE = 'production'` を選択。
+2. セル1でDrive mount → セル2でclone/pull → セル3でworker bootstrap。
+3. セル4でproduction config選択、セル4bで入力・言語モデルの準備。
+4. セル5のCPU filteringを実行。直前のpreflightで **production / config / input / work_dir / scratch_dir / target / candidates / device / worker Python / Git commit** を確認します。処理はexact-dedupまでで、configがcudaでもGPUを必要としません。
+
+### GPU scoring（L4へ切替後に再開可能）
+
+1. L4 runtimeへ切り替え、セル0で再度 `RUN_MODE = 'production'` を設定。
+2. Drive mount → repo clone/pull → worker bootstrap → production config選択を再実行。
+3. bootstrapはnvidia-smiの結果を表示し、GPUありなら **`lid,cuda`**、GPUなしなら **`lid,scoring`** を自動選択します。`USE_CUDA_DEPS` の手動変更は不要です。
+4. セル6でGPU preflightを実行。GPU名・VRAM、workerの `cuda_available()`、Bicleaner CLIの絶対パス、package versionを表示します。cuda指定でGPU未検出・workerからのGPU利用不可・CLI/package未導入ならscoringを開始しません。
+5. セル7で `score --resume`。起動直前にもpipeline preflightとGPU検査を実施します。既存のCPU stageは現在のsignature検証後に再利用されます。
+6. セル8でfinal selection（直前にpreflight表示）→ セル9でaudit → セル10でstats / plot確認。
+
+`run_stage()` はworker Pythonを使い、commandを表示してから `Popen` のstdout / stderrを一行ずつNotebookへflushします。`processed`, `total`, `pairs/sec`, `estimated_remaining_seconds` など既存のscoringログを表示し、非ゼロreturn codeでは例外になります。`shell=True` は使いません。Notebook wrapperで `--config` / `--device` / `--target-size` を追加指定するとpreflightと実行設定がずれるため拒否します。これらの変更は選択中のYAMLに保存してください。通常のCLIのオプションは従来どおりです。
+
+### Smoke test（本番と別work_dir）
+
+セル0を `RUN_MODE = 'smoke'` にし、同じ順で実行します。セル4bは本番TSVから専用smoke入力を作成できます。
+
+- `SMOKE_SAMPLE_MODE = 'head'`（初期値）: 先頭50,000行。高速なpipeline動作確認向けで、サイト分布を代表するsampleではありません。
+- `SMOKE_SAMPLE_MODE = 'random'`: seed=42で全入力から50,000行をreservoir sampling。全入力を走査しますがメモリはsample件数に比例し、全件list化しません。採用した行は元の入力順で保存します。
+- `SMOKE_SAMPLE_SIZE` / `SMOKE_SEED` で件数・seedを変更できます。原文をNotebookログへ表示しません。
+- 既存のsmoke入力は保持します。手動作成された入力はsampling履歴不明と表示して再利用します。自動作成sampleは設定とsourceの識別情報をsidecarへ記録し、同じ設定なら更新しません。違うsampling設定に変更したときは明示的な `REBUILD_SMOKE_INPUT = True` が必要です。入力を作り直すと現在のcheckpoint signature規則に従って再計算されます。
+- smoke configはGit除外対象です。GPUランタイムの切替で `/content` のconfigが消えた場合、同じ既定設定なら再作成できます。smokeの閾値等を独自調整した場合はその設定も保存して復元してください。
+
+切断後はモードを再設定し、同じDrive・configでセルを再実行します。各stageには `--resume` を付けています。Drive上にParquetとmanifestが残り、ColabローカルのSQLite scratchは再構築できます。今回の変更ではフィルタ本体、checkpointのcode_digest / config / upstream identityの検証、cudaのfail-fast / auto fallback、OOM時のbatch縮小を変更していません。
 
 ColabのカーネルがPython 3.13でも、セル3が `scripts/bootstrap_colab.py` で処理用のPython 3.11環境を `.work/colab-venv` に作成します。以後の処理とBicleaner CLIはその環境で実行し、Drive mount・表示は元のカーネルで行います。uvによるPython取得・lock済み依存導入を基本とし、pip fallbackも対応バージョンの処理用環境へ限定します。カーネルのPythonやNumPyを上書きしません。`REPO_REF` 未指定ならセル2で既存checkoutを `git pull --ff-only` により更新します。旧Notebookで導入に失敗した場合は最新版を開き直し、セル2以降を再実行してください。
 

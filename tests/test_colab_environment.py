@@ -3,7 +3,9 @@ import importlib.util
 import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
+import colab_ops
 import nbformat
 import pytest
 from conftest import ROOT
@@ -93,16 +95,22 @@ def test_notebook_stage_commands_run_in_worker(tmp_path):
     )
     calls = []
 
-    class Runner:
-        @staticmethod
-        def run(command, **kwargs):
-            calls.append((command, kwargs))
-
     namespace = dict(
-        subprocess=Runner,
         PIPELINE_PYTHON="/worker311/bin/python",
         CONFIG=tmp_path / "config.yaml",
         WORKER_ENV={"PATH": "/worker311/bin"},
+        RUN_MODE="smoke",
+        LAYOUT={},
+        REPO_DIR=ROOT,
+        read_active_config=lambda: {},
+        ops=SimpleNamespace(
+            validate_run=lambda *args: None,
+            pipeline_command=colab_ops.pipeline_command,
+            preflight=lambda *args: None,
+            will_score=colab_ops.will_score,
+            gpu_preflight=lambda *args: None,
+            stream_command=lambda command, **kwargs: calls.append((command, kwargs)),
+        ),
     )
     exec(compile(ast.Module(body=[function], type_ignores=[]), "<notebook>", "exec"), namespace)
     namespace["run_stage"]("score", "--resume")

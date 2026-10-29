@@ -4,10 +4,16 @@
 
 | 確認 | 結果 |
 | --- | --- |
-| Python 3.11環境 | uv.lockから独立した環境を作成し、pytest 58件成功 |
-| Python 3.12環境 | pip editable install、pytest 58件成功 |
+| Python 3.11環境 | uv.lockから独立した環境を作成し、pytest 99件成功 |
+| Python 3.12環境 | pip editable install、pytest 99件成功 |
 | Python 3.13のホスト | WindowsのPython 3.13.14からbootstrapを実行し、ロック済みCPU依存をPython 3.11.18の独立環境へ導入。3.13へ本体依存を導入せず実行できることを確認 |
 | Notebook環境分離 | stage CLI・config処理・GPU確認を処理用Pythonへ渡すこと、カーネルから本体やYAML等をimportしないこと、pip fallbackも対応版の処理環境へ限定することをテスト |
+| Colab mode safety | smoke / productionの実パス照合、configの保持、モード変更後の古い変数の拒否、各長時間stage直前のpreflightを検証 |
+| Colab sampling | head抽出、固定seedのreservoir sampling再現性、既存手動sampleの保持、sampling設定変更時の明示的な再作成要求を確認 |
+| Colab realtime logs | mockと実subprocessでstdout / stderrの逐次表示、非ゼロreturn codeの例外、scoring進捗行の表示を確認 |
+| GPU bootstrap / preflight | nvidia-smiをmockし、GPU有無によるextras選択と、cuda指定で4項目のいずれかが欠けた場合の停止を検証 |
+| Synthetic smoke isolation | mode-specific configでnormalize → rule-filter → speech-filter → exact-dedupまで実行。production入力・config・出力treeの内容が一切変わらないことを確認 |
+| Python 3.13の運用ヘルパー | Python 3.13.18でcolab_opsをimportし、本体・PyYAML・fastText・TensorFlow・PyArrowをカーネルへimportしないことを確認 |
 | 合成データ全工程 | normalize → rule → speech → exact pair dedup → score double → one-side dedup → select → audit → statsが完了 |
 | Resume | 完了generationと推論途中のshardを再利用、出力同一性を確認 |
 | 設定変更 / force | target・candidate変更で推論再利用、前stageのforceで子孫を更新 |
@@ -28,6 +34,21 @@
 この結果はBicleanerの品質評価やL4性能の実測ではありません。合成demoのスコアはtest doubleで、学習データ選定の根拠には使えません。
 
 実BicleanerモデルのCPU / GPU推論、NVIDIA L4の速度・VRAM使用量、ColabのDrive mountと切断後の再同期、JParaCrawl全量からの30万件抽出はローカルでは未検証です。Colab Notebookで確認してください。Notebookのclone先URLは `Yaaamashiro/jparacrawl-filtering` に設定済みです。
+
+## User-reported Colab smoke result
+
+以下は利用者から報告された既存の実データsmoke結果です。今回ローカルで再計測した数値ではありません。
+
+| Stage | Input / accepted | Rejected |
+| --- | ---: | ---: |
+| Input / normalize | 50,000 | 0 |
+| Rule-filter | 38,247 | 11,753 |
+| Speech-filter | 36,536 | 1,711 |
+| Exact normalized pair dedup | 21,923 | 14,613 |
+| Bicleaner processed | 21,923 | — |
+| Top candidates | 10,000 | 11,923 |
+
+NVIDIA L4（23034 MiB）、Bicleaner-AI 3.6、GPU実行で約133 pairs/sec、return code 0。大量の完全重複除去はこの入力の観測結果であり、運用改修のために除去規則を変更していません。`src/`、既存bootstrap、default config、uv.lockは今回の変更対象外です。Colab/Drive上の実データ・checkpointへエージェントからの変更は行っていません。
 
 再実行コマンド:
 

@@ -6,6 +6,7 @@ logs/
 models/
 .cache/
 .work/
+configs/smoke.yaml
 *.parquet
 *.arrow
 *.tsv
