@@ -22,13 +22,13 @@ NotebookカーネルはPython 3.13でも使用できます。処理用Python 3.1
 Google Drive / optional NVIDIA L4. 原データの利用条件を公式ページで確認し、Driveへ展開してください。
 このNotebookは実文の出力を保存しません。切断後は同じconfigとDriveから `--resume` で再開します。
 clone先は `Yaaamashiro/jparacrawl-filtering` に設定済みです。
-デフォルトはsmokeです。本番では冒頭のRUN_MODEをproductionへ変更してください。
+デフォルトはproductionです。smoke testでは冒頭のRUN_MODEをsmokeへ変更してください。
 """)
 md(
     "## 0. Run mode / smoke sampling settings\nproductionとsmokeは入力・config・出力を分離します。モード変更後はconfig選択以降も再実行してください。"
 )
 code("""
-RUN_MODE = 'smoke'  # 'smoke' or 'production'; explicitly select production for the full run.
+RUN_MODE = 'production'  # 'production' or 'smoke'; select smoke for a small pipeline test.
 SMOKE_SAMPLE_MODE = 'head'  # 'head': fast pipeline check; 'random': scans the full input.
 SMOKE_SAMPLE_SIZE = 50000
 SMOKE_SEED = 42

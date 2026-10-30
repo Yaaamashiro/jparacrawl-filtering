@@ -63,7 +63,7 @@ python -m pip install -e '.[lid,scoring,dev]'  # Linux / Colab
 
 ## Google Colab usage
 
-[`notebooks/jparacrawl_filtering_colab.ipynb`](notebooks/jparacrawl_filtering_colab.ipynb) を[Colabで開きます](https://colab.research.google.com/github/Yaaamashiro/jparacrawl-filtering/blob/main/notebooks/jparacrawl_filtering_colab.ipynb)。clone先URLは設定済みです。冒頭のセル0で `RUN_MODE = 'smoke'` または `'production'` を選びます。デフォルトはsmokeで、それ以外の文字列は即座にエラーになります。
+[`notebooks/jparacrawl_filtering_colab.ipynb`](notebooks/jparacrawl_filtering_colab.ipynb) を[Colabで開きます](https://colab.research.google.com/github/Yaaamashiro/jparacrawl-filtering/blob/main/notebooks/jparacrawl_filtering_colab.ipynb)。clone先URLは設定済みです。冒頭のセル0で `RUN_MODE = 'production'` または `'smoke'` を選びます。デフォルトはproductionです。許可する値はこの2つのみで、それ以外は即座にエラーになります。
 
 | 設定 | production | smoke |
 | --- | --- | --- |

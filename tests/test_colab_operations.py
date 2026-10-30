@@ -335,9 +335,9 @@ def test_synthetic_smoke_cpu_does_not_write_production(layout):
 def test_notebook_mode_and_preflight_structure():
     nb = nbformat.read(ROOT / "notebooks/jparacrawl_filtering_colab.ipynb", as_version=4)
     code = [c.source for c in nb.cells if c.cell_type == "code"]
-    assert "RUN_MODE = 'smoke'" in code[0]
+    assert "RUN_MODE = 'production'" in code[0]
     with pytest.raises(ValueError, match="RUN_MODE"):
-        exec(code[0].replace("RUN_MODE = 'smoke'", "RUN_MODE = 'invalid'"), {})
+        exec(code[0].replace("RUN_MODE = 'production'", "RUN_MODE = 'invalid'"), {})
     bootstrap = next(c for c in code if "scripts/bootstrap_colab.py" in c)
     assert "ops.gpu_extras" in bootstrap and "USE_CUDA_DEPS" not in bootstrap
     assert "WORKER_ENV['MPLBACKEND'] = 'Agg'" in bootstrap
