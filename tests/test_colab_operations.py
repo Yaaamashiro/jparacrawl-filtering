@@ -122,7 +122,11 @@ def test_missing_nvidia_binary_selects_cpu(monkeypatch):
 @pytest.mark.parametrize("returncode", [0, 7])
 def test_stream_runner_is_incremental(returncode, monkeypatch, capsys):
     observed = []
-    env = {"PATH": "/worker311/bin", "PYTHONUNBUFFERED": "1"}
+    env = {
+        "PATH": "/worker311/bin",
+        "PYTHONUNBUFFERED": "1",
+        "MPLBACKEND": "module://matplotlib_inline.backend_inline",
+    }
 
     class Lines:
         closed = False
@@ -141,7 +145,8 @@ def test_stream_runner_is_incremental(returncode, monkeypatch, capsys):
 
     def popen(command, **kwargs):
         assert command[0] == "/worker311/bin/python"
-        assert kwargs["env"] is env and kwargs["shell"] is False
+        assert kwargs["env"] == {**env, "MPLBACKEND": "Agg"}
+        assert kwargs["shell"] is False
         assert kwargs["stderr"] == subprocess.STDOUT
         assert kwargs["stdout"] == subprocess.PIPE and kwargs["bufsize"] == 1
         return SimpleNamespace(stdout=lines, wait=lambda: returncode)
@@ -158,6 +163,7 @@ def test_stream_runner_is_incremental(returncode, monkeypatch, capsys):
     assert "Running:" in observed[0] and "--resume" in observed[0]
     assert "processed=10000" in capsys.readouterr().out
     assert lines.closed
+    assert env["MPLBACKEND"] == "module://matplotlib_inline.backend_inline"
 
 
 def test_real_runner_merges_stdout_and_stderr(capsys):
@@ -166,6 +172,28 @@ def test_real_runner_merges_stdout_and_stderr(capsys):
     ops.stream_command([sys.executable, "-c", program], env)
     output = capsys.readouterr().out
     assert "processed=15000" in output and "estimated_remaining_seconds=50.3" in output
+
+
+def test_real_worker_saves_plot_with_inherited_inline_backend(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("MPLBACKEND", "module://matplotlib_inline.backend_inline")
+    env = os.environ.copy()
+    output = tmp_path / "plot.png"
+    program = """
+import sys
+import matplotlib
+import matplotlib.pyplot as plt
+assert matplotlib.get_backend().lower() == 'agg'
+assert 'matplotlib_inline' not in sys.modules
+fig, ax = plt.subplots()
+ax.plot([0, 1], [0, 1])
+fig.savefig(sys.argv[1])
+plt.close(fig)
+print('worker plot saved')
+"""
+    ops.stream_command([sys.executable, "-c", program, str(output)], env)
+    assert output.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+    assert "worker plot saved" in capsys.readouterr().out
+    assert os.environ["MPLBACKEND"] == env["MPLBACKEND"]
 
 
 @pytest.mark.parametrize(
@@ -312,6 +340,7 @@ def test_notebook_mode_and_preflight_structure():
         exec(code[0].replace("RUN_MODE = 'smoke'", "RUN_MODE = 'invalid'"), {})
     bootstrap = next(c for c in code if "scripts/bootstrap_colab.py" in c)
     assert "ops.gpu_extras" in bootstrap and "USE_CUDA_DEPS" not in bootstrap
+    assert "WORKER_ENV['MPLBACKEND'] = 'Agg'" in bootstrap
     runner = next(c for c in code if "def run_stage" in c)
     tree = ast.parse(runner)
     function = next(

@@ -93,6 +93,7 @@ for key in ('PYTHONPATH', 'PYTHONHOME', 'VIRTUAL_ENV'):
 WORKER_ENV['PATH'] = str(Path(PIPELINE_PYTHON).parent) + os.pathsep + WORKER_ENV.get('PATH', '')
 WORKER_ENV['PYTHONUNBUFFERED'] = '1'
 WORKER_ENV['PYTHONIOENCODING'] = 'utf-8'
+WORKER_ENV['MPLBACKEND'] = 'Agg'  # Save figures without inheriting Colab's inline backend.
 print('Notebook kernel:', sys.version.split()[0])
 print('Pipeline worker:', runtime['version'], PIPELINE_PYTHON)
 """)

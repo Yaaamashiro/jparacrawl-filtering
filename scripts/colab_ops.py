@@ -86,6 +86,9 @@ def gpu_extras(gpu):
 
 def stream_command(command, env):
     command = [str(x) for x in command]
+    # Colab's inline backend belongs to the kernel, not the isolated worker.
+    # Set this before matplotlib is imported; matplotlib.use() would be too late.
+    env = {**env, "MPLBACKEND": "Agg"}
     print("Running:\n" + shlex.join(command), flush=True)
     proc = subprocess.Popen(
         command,

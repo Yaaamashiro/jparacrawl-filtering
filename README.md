@@ -97,6 +97,8 @@ configのinput / work_dir / scratch_dirとconfig自身のパスは、モード�
 
 `run_stage()` はworker Pythonを使い、commandを表示してから `Popen` のstdout / stderrを一行ずつNotebookへflushします。`processed`, `total`, `pairs/sec`, `estimated_remaining_seconds` など既存のscoringログを表示し、非ゼロreturn codeでは例外になります。`shell=True` は使いません。Notebook wrapperで `--config` / `--device` / `--target-size` を追加指定するとpreflightと実行設定がずれるため拒否します。これらの変更は選択中のYAMLに保存してください。通常のCLIのオプションは従来どおりです。
 
+セル10で `module://matplotlib_inline.backend_inline` のbackendエラーになった場合は、`WORKER_ENV["MPLBACKEND"] = "Agg"` を実行してからセル10だけ再実行してください。最新版ではworker起動前にAggを指定します。カーネルのinline表示設定は変更せず、生成したPNGをNotebookに表示します。フィルタリング・scoringの再計算は不要です。
+
 ### Smoke test（本番と別work_dir）
 
 セル0を `RUN_MODE = 'smoke'` にし、同じ順で実行します。セル4bは本番TSVから専用smoke入力を作成できます。
