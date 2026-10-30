@@ -172,16 +172,24 @@ code("""
 run_stage('audit', '--resume')
 print('Review:', Path(config['paths']['work_dir']) / 'outputs/audit')
 """)
-md("## 10. Statistics and figures")
+md(
+    "## 10. Lightweight statistics and figures\n完了済みcheckpointから統計だけを生成します。Pipelineは起動せず、前半stage・scoring全体のParquetは走査しません。GPUは不要です。"
+)
 code("""
-run_stage('stats', '--resume')
+config = read_active_config()
+ops.validate_run(RUN_MODE, CONFIG, config, LAYOUT)
+command = [PIPELINE_PYTHON, str(REPO_DIR / 'scripts/generate_lightweight_stats.py'),
+           '--config', str(CONFIG), '--resume']
+ops.stream_command(command, env=WORKER_ENV)
 import json
 from IPython.display import Image, display
 STATS = Path(config['paths']['work_dir']) / 'outputs/stats'
 summary = json.loads((STATS / 'stats.json').read_text())
 print(json.dumps({'stages': summary['stages'], 'shortfall': summary['shortfall']}, indent=2))
-for name in ['ja_length.png', 'en_words.png', 'bicleaner_scores.png',
-             'selected_vs_rejected.png', 'reject_reasons.png']:
+print(json.dumps(summary['length_bins'], ensure_ascii=False, indent=2))
+for name in ['stage_retention.png', 'selected_ja_length.png', 'selected_en_words.png',
+             'selected_bicleaner_scores.png', 'length_bin_comparison.png',
+             'candidate_bicleaner_scores.png', 'reject_reasons.png']:
     display(Image(filename=str(STATS / name)))
 """)
 md("""## Reconnect / rerun

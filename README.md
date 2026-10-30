@@ -97,7 +97,7 @@ configのinput / work_dir / scratch_dirとconfig自身のパスは、モード�
 
 `run_stage()` はworker Pythonを使い、commandを表示してから `Popen` のstdout / stderrを一行ずつNotebookへflushします。`processed`, `total`, `pairs/sec`, `estimated_remaining_seconds` など既存のscoringログを表示し、非ゼロreturn codeでは例外になります。`shell=True` は使いません。Notebook wrapperで `--config` / `--device` / `--target-size` を追加指定するとpreflightと実行設定がずれるため拒否します。これらの変更は選択中のYAMLに保存してください。通常のCLIのオプションは従来どおりです。
 
-セル10で `module://matplotlib_inline.backend_inline` のbackendエラーになった場合は、`WORKER_ENV["MPLBACKEND"] = "Agg"` を実行してからセル10だけ再実行してください。最新版ではworker起動前にAggを指定します。カーネルのinline表示設定は変更せず、生成したPNGをNotebookに表示します。フィルタリング・scoringの再計算は不要です。
+セル10は `scripts/generate_lightweight_stats.py` をworkerで実行します。Pipelineの初期化・stage再実行は行いません。旧Notebookを使用中なら最新版を開き、セル2でrepoを更新してから新しいセル10を実行してください。セッションが切れている場合はセル0〜4のmode / Drive / repo / worker / configのみ再設定します。完了済みのセル5〜9を統計のために再実行する必要はありません。描画にはworkerでAggを指定し、生成したPNGをNotebookに表示します。
 
 ### Smoke test（本番と別work_dir）
 
@@ -282,9 +282,32 @@ seed固定のreservoir samplingにより、採用500件・全stageの不採用20
 
 ## Statistics
 
-stageごとのinput / accepted / rejected / reject_rateと理由別件数をmanifestに保存し、最後にJSON・CSVへまとめます。理由は複数付き得るため、理由別件数の和はreject行数を超えることがあります。単語数は英字語・数値を数える軽量regexです。
+本番完了後の統計には、Notebookセル10または次の専用scriptを使用してください。GPUは不要です。
 
-matplotlibで日本語文字数・英語語数（before / after rules / selected比較）、Bicleaner分布、selected vs rejected長さ分布、reject理由件数の5図を生成します。ヒストグラムは全行をstreamして固定binへ集計し、図の最後のbinは上限超過を含みます。設定、bin定義、選択件数・shortfall、実行時間・throughputも保存します。原文は統計や通常ログに書きません。
+```bash
+/content/jparacrawl-filtering/.work/colab-venv/bin/python \
+  /content/jparacrawl-filtering/scripts/generate_lightweight_stats.py \
+  --config /content/drive/MyDrive/jparacrawl-filtering/config.yaml --resume
+```
+
+`src/`をimportせず、Pipeline / StageStoreを生成しません。既存checkpointのcode_digestやsignatureを変更せず、auditも再実行しません。CURRENTが指すcomplete manifestを読み、8 stageのinput / accepted / rejected / reject_rate / shard数 / completeと理由件数を復元します。generation間のupstream identity、selected exportの出所、configのtarget_size / length_binsを照合し、別runの混在時は停止します。入力Parquetの全件checksum再検証は行わず、完了manifestを信頼します。
+
+| 読み取り対象 | Parquet本文のI/O |
+| --- | --- |
+| normalize / rule-filter / speech-filter / exact-dedup / scoring / select stage | 0件。manifestのみ |
+| score | accepted > 0のpartのみ。accepted=Trueの行だけ集計 |
+| dedup | accepted > 0のpartのみ。accepted=Trueの行だけ集計 |
+| outputs/selected/selected.parquet | 最終採用データのみ |
+
+score / dedupは境界partの不採用行も含め、開くpartの総行数が各1,100,000を超える場合、Parquetを開く前に停止します。本番のtop候補100万件・dedup元100万件・selected30万件なら、物理読み取りはおおむね230万行の必要columnだけです。実際のpart数・物理行数・採用行数は `stats.json` の `io` に保存します。32,768行ずつ処理し、本文をPython dictへ展開しません。candidate / dedupはヒストグラムとbin件数のみ保持し、selectedの3数値列だけをコンパクトな配列に保持してexact quantileを求めます。
+
+全16,668,661件のスコア分布は、巨大なDrive再走査を避けるため再計算しません。上位100万候補・dedup後・最終30万件の分布はexactです。normalize / rule-filterのbefore / after長さ分布も省略し、stage retentionはmanifestから可視化します。理由は複数付き得るため、理由別件数の和はreject行数と一致しません。
+
+`outputs/stats/` に `stats.json`, `effective_config.json`, `summary.json`, `stages.csv`, `reject_reasons.csv`, `length_bins.csv`, `report.md` と7図を保存します。図は `stage_retention.png`, `selected_ja_length.png`, `selected_en_words.png`, `selected_bicleaner_scores.png`, `length_bin_comparison.png`, `candidate_bicleaner_scores.png`, `reject_reasons.png` です。top候補→dedup→selectedの各binの件数・比率と、最終quotaのtarget / actual / differenceを比較できます。デフォルト300,000件のbin目標は順に6,000 / 45,000 / 120,000 / 99,000 / 30,000件です。selectedのscore・JA文字数・EN語数についてmin / max / mean / median / p10 / p25 / p75 / p90を保存します。quantileはlinear interpolationです。
+
+書き込み先は `outputs/stats/` のみです。各ファイルは `.partial` から置換し、最後にのみ `complete: true` の `manifest.json` を作成します。上書き開始時に古いstats完了manifestを取り除くため、切断後に途中生成物を完了扱いしません。`--resume` は同じconfig・source generation・selected export情報・scriptと、出力ファイルSHA256が一致すると再利用します。違えば統計だけを再生成します。checkpoint / selected / audit / models / configは更新しません。
+
+従来のpipeline CLI `stats` と `run` の統計処理は互換性のため変更しておらず、大規模データを再走査します。本番完了後は上記scriptを使用してください。将来の新規runで各stageのhistogramを処理中にmanifestへ蓄積する改善は別TODOとし、今回のcheckpointを無効化するpackage変更には含めません。
 
 ## Tests / offline synthetic demo
 

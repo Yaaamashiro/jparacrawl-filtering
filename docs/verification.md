@@ -1,5 +1,22 @@
 # Local verification
 
+## Lightweight statistics (2026-10-30)
+
+Python 3.11 / 3.12でpytest各113件成功。ruff、Notebook schema / セル構文 / 保存outputなしも確認しました。以下は合成データによるローカル検証で、Drive本番データを再走査した結果ではありません。
+
+- 16,668,661行相当のscore manifestを作り、accepted=0の巨大tailとnormalize / rule-filter / speech-filter / exact-dedup / scoring / select stageのParquetを存在させずに統計生成に成功。
+- 開くParquetはscoreの採用ありpart、dedupの採用ありpart、selected exportのみと検証。本文列を含めず、統計用4列（候補ではacceptedも）をbatchで読み、混在partの不採用行を除外。
+- manifest件数・複数reject理由の合計、3段階のlength-bin分布、30万件の目標quota、selectedのexact quantile、各PNG出力を確認。
+- 実Pipelineが生成したsynthetic checkpoint treeでもidentityとselected exportの互換性を確認。新scriptはsubprocess内でpackageをimportせず実行。
+- 完了manifestが最後に作られること、失敗した上書きでは完了markerを残さないこと、resume時は出力checksum検証だけでParquetを開かないことを確認。
+- config不一致・不完全generation・upstream混在・export混在・物理行数110万件超を本文走査前に拒否。実行中のsource変更も完了前に拒否。
+- 成功時・失敗時とも、data / checkpoints / selected / audit / models / configの内容とmtimeが変わらないことを確認。`git diff 74a0029 -- src scripts/bootstrap_colab.py configs/default.yaml uv.lock` に差分なし。
+- Notebookセル10がpipeline CLIのstatsを呼ばず、workerで専用scriptを実行することを検証。
+
+利用者から本番score processed=16,668,661 / accepted=1,000,000、dedup accepted=977,822、select accepted=300,000、audit完了の報告を受けています。本修正では本番Driveや実データにアクセスしていません。
+
+## Earlier pipeline verification (2026-10-29)
+
 2026-10-29にWindows CPU環境で実施。JParaCrawl実文はテストに使用していません。
 
 | 確認 | 結果 |
