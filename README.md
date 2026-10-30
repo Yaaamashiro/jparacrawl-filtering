@@ -309,6 +309,43 @@ score / dedupは境界partの不採用行も含め、開くpartの総行数が�
 
 従来のpipeline CLI `stats` と `run` の統計処理は互換性のため変更しておらず、大規模データを再走査します。本番完了後は上記scriptを使用してください。将来の新規runで各stageのhistogramを処理中にmanifestへ蓄積する改善は別TODOとし、今回のcheckpointを無効化するpackage変更には含めません。
 
+## Text-only corpus export
+
+完成済みの `outputs/selected/selected.parquet` から、T2T / S2ST後段用のJSONLをCPUだけでexportできます。既存stage・Bicleaner・auditは再実行しません。ColabではDrive / repo / worker / production configまで復元し、次を追加セルで実行します。
+
+```python
+config = read_active_config()
+ops.validate_run(RUN_MODE, CONFIG, config, LAYOUT)
+ops.stream_command([
+    PIPELINE_PYTHON, str(REPO_DIR / 'scripts/export_text_corpus.py'),
+    '--config', str(CONFIG), '--seed', '42',
+], env=WORKER_ENV)
+```
+
+CLI:
+
+```bash
+/content/jparacrawl-filtering/.work/colab-venv/bin/python \
+  /content/jparacrawl-filtering/scripts/export_text_corpus.py \
+  --config /content/drive/MyDrive/jparacrawl-filtering/config.yaml --seed 42
+```
+
+デフォルトで入力300,000件を必須とし、**train=298,000 / dev=2,000 / test=0** に分割します。出力は `<work_dir>/outputs/text-corpus/manifest.jsonl` と `summary.json` の2ファイルで、test corpusは作りません。外部評価用データやTTS・学習処理は含みません。小規模synthetic検証では `--expected-total 20 --dev-size 4` のように件数を明示的に変更できます。
+
+JSONLは1文対1行で、元Parquet順を保持します。`pair_id` は元の文字列をそのまま使い、新しいIDを付けません。全行に `pair_id`, `split`, `ja_text`, `en_text`, `corpus`, `length_bin` を保存し、sourceにあれば `bicleaner_score`, `source_line` も保持します。
+
+```json
+{"pair_id":"p000012345678","split":"train","ja_text":"これは自作の例文です。","en_text":"This is a synthetic example.","corpus":"jparacrawl_v3_filtered","length_bin":2,"bicleaner_score":0.998,"source_line":12345678}
+```
+
+リポジトリの既定設定は `training_text: normalized` なので `ja_norm` / `en_norm` を使います。本番configの実際の値はexport時に読み、`raw` なら `ja_raw` / `en_raw` を使います。既存configは変更しません。利用可能なselect checkpointの設定・selected exportのidentityと照合し、Parquetに `ja` / `en` があれば選んだfieldと全文一致することも検査します。不一致なら停止します。追加のUnicode normalization・strip・文の書き換えは行いません。空文検査のstrip判定は出力文字列を変更しません。
+
+devのbin別件数は、実際の `length_bin` 件数に比例して最大剰余法で割り当てます。整数計算を使い、余りの同率はbin ID昇順で解決して合計を必ず2,000件にします。各binで `SHA256(JSON([seed, length_bin, pair_id]))` の昇順（同率はpair_id順）にdevを選びます。例えばbin件数が6,000 / 45,000 / 120,000 / 99,000 / 30,000なら、devは40 / 300 / 800 / 660 / 200件です。同じ入力・設定・seedならJSONLのバイト列とSHA256が一致します。
+
+ID一意性、train/dev件数、bin割り当て、空文、train/dev間の同一 `(ja_text, en_text)` を検査します。文対leakageがあれば自動削除や学習文の変更をせずexportを停止します。SQLiteの作業DBはローカルtempへ置き、Parquetは8,192行ずつ必要columnだけを読みます。入力Parquet全体のSHA256計算は最終30万件のファイルだけに行い、元export manifestのchecksumがあれば照合します。前半stageやscoringのParquetは読みません。
+
+`summary.json` にはsource / source_sha256 / output_sha256、seedとsplit方法、train/dev/test件数、採用text field、実際のsource schema、設定・checkpoint確認結果、all/train/devのbin件数を保存します。JSONLは一時ファイルから置換し、完了markerの `summary.json` を最後に置換します。中断時はsummaryの存在とoutput_sha256で完了を確認できます。再実行してもselected / audit / config / checkpointは更新せず、text-corpusの出力だけを再生成します。実文JSONLは既存の `.gitignore` でGit対象外です。
+
 ## Tests / offline synthetic demo
 
 ```bash

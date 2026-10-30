@@ -1,5 +1,16 @@
 # Local verification
 
+## Text corpus export
+
+Windows CPU環境の合成データで検証しました。本番Driveのconfig / selected.parquetは取得しておらず、実際のtraining_textとfield整合性は利用者のexport実行時に確認します。
+
+- Python 3.11 / 3.12でpytest各128件成功。ruff / formatとNotebook静的検証も成功。
+- 合成300,000文対を独立scriptで2回exportし、train=298,000 / dev=2,000 / test=0、devのbin件数40 / 300 / 800 / 660 / 200、出力SHA256一致を確認。入力ParquetのSHA256・size・mtimeも不変。
+- unit testで最大剰余法の件数・同率処理、seed再現性、seed変更時のdev変更、IDの保持・一意性、text leakage拒否、空文拒否、原文field設定の尊重、追加metadataを検証。
+- 実Pipelineが生成した合成selected.parquetのschema・export manifest・select generationとの互換性を確認。configのtraining_textがcheckpointと異なる場合は停止。
+- subprocessでpackageをimportせずCLI実行できることを確認。成功・検証失敗時に既存selected / audit / config等を変更せず、出力はtext-corpusのみ。
+- `src/`、既存Notebook、pipeline / scoring / stats / bootstrap / default config / uv.lockは変更していません。
+
 ## Lightweight statistics (2026-10-30)
 
 Python 3.11 / 3.12でpytest各113件成功。ruff、Notebook schema / セル構文 / 保存outputなしも確認しました。以下は合成データによるローカル検証で、Drive本番データを再走査した結果ではありません。
