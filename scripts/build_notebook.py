@@ -16,17 +16,29 @@ def code(text):
     cells.append(nbf.v4.new_code_cell(text.strip()))
 
 
-md("""# JParaCrawl filtering for Direct S2ST
+md("""# JParaCrawlの日英対訳を選抜する
 
-NotebookカーネルはPython 3.13でも使用できます。処理用Python 3.11は独立環境へ自動導入します。
-Google Drive / optional NVIDIA L4. 原データの利用条件を公式ページで確認し、Driveへ展開してください。
-このNotebookは実文の出力を保存しません。切断後は同じconfigとDriveから `--resume` で再開します。
-clone先は `Yaaamashiro/jparacrawl-filtering` に設定済みです。
-デフォルトはproductionです。smoke testでは冒頭のRUN_MODEをsmokeへ変更してください。
+JParaCrawl v3から発話に適した文対を選び、DriveにParquetと学習用JSONLを保存します。
+
+| 目的 | 実行する手順 |
+| --- | --- |
+| 初回の本番処理 | **0〜4b** 準備 → **5** フィルタリング → **6〜7** GPU確認と採点 → **8** 選抜 |
+| 小規模に試す | **0** で `smoke` を選択 → **1〜8** |
+| 切断・ランタイム切り替え後 | **0〜4** で同じ設定を読み込み、続きの手順へ |
+| 選抜結果を確認 | **9** 監査サンプル、**10** 軽量統計 |
+| **選抜済みParquetをJSONLへ変換** | **0〜4 → 11**。CPUで実行できます |
+
+初回処理では、展開済みの `en-ja.bicleaner05.txt` をDriveの `MyDrive/jparacrawl/v3/en-ja/` に置きます。本番のBicleaner採点にはL4を想定しています。手順5をCPUで済ませてから、GPUに切り替えられます。
+
+[リポジトリと入力データの案内](https://github.com/Yaaamashiro/jparacrawl-filtering#colabで使う)
 """)
-md(
-    "## 0. Run mode / smoke sampling settings\nproductionとsmokeは入力・config・出力を分離します。モード変更後はconfig選択以降も再実行してください。"
-)
+md("""## 0. 実行モードを選ぶ
+
+- `production`（既定）で本番の設定と成果物を使います。
+- `smoke` では別の作業先に小規模な入力を作ります。`head` は先頭行、`random` は入力全体から固定seedで抽出します。
+
+モードを切り替えたら手順4で設定を選び直します。
+""")
 code("""
 RUN_MODE = 'production'  # 'production' or 'smoke'; select smoke for a small pipeline test.
 SMOKE_SAMPLE_MODE = 'head'  # 'head': fast pipeline check; 'random': scans the full input.
@@ -38,12 +50,15 @@ if RUN_MODE not in ('smoke', 'production'):
 if SMOKE_SAMPLE_MODE not in ('head', 'random'):
     raise ValueError("SMOKE_SAMPLE_MODE must be 'head' or 'random'")
 """)
-md("## 1. Google Drive mount")
+md("## 1. Google Driveを接続する")
 code("""
 from google.colab import drive
 drive.mount('/content/drive')
 """)
-md("## 2. Repository clone")
+md("""## 2. リポジトリを取得・更新する
+
+既存のcheckoutは `git pull --ff-only` で更新します。再現実験では `REPO_REF` にコミットSHAまたはタグを指定できます。
+""")
 code("""
 import os
 import subprocess
@@ -74,9 +89,10 @@ LAYOUT = ops.path_layout(REPO_DIR)
 print('Python:', sys.version.split()[0])
 print('Commit:', subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip())
 """)
-md(
-    "## 3. Worker environment (Python 3.11 / uv with pip fallback)\nカーネルのPythonを変更せず、NumPy<2が必要なBicleanerとfastTextを独立環境へ導入します。pip fallbackも同じ処理用環境で実行します。"
-)
+md("""## 3. 処理用のPython環境を用意する
+
+ノートブックのカーネルとは別にPython 3.11の環境を作り、検出したGPUに合わせて依存関係を導入します。ランタイム切り替え後もこの手順を実行します。
+""")
 code("""
 gpu = ops.nvidia_gpu()
 extras = ops.gpu_extras(gpu)
@@ -97,9 +113,10 @@ WORKER_ENV['MPLBACKEND'] = 'Agg'  # Save figures without inheriting Colab's inli
 print('Notebook kernel:', sys.version.split()[0])
 print('Pipeline worker:', runtime['version'], PIPELINE_PYTHON)
 """)
-md(
-    "## 4. Mode-specific config\nproductionはDriveの既存configを保持します。新規本番configはdevice=cuda。smokeは専用configとtarget=5000 / candidates=10000 / shard=5000を使用します。パスがモードと矛盾すれば停止します。"
-)
+md("""## 4. 設定と保存先を確認する
+
+表示されるモード、設定ファイル、入力、作業先を確認します。本番ではDriveの既存YAMLを再利用します。新規の本番設定はGPU必須の `device: cuda` です。
+""")
 code("""
 CONFIG = LAYOUT[ops.validate_mode(RUN_MODE)]['config']
 def read_active_config():
@@ -127,9 +144,10 @@ def run_stage(stage, *options):
         ops.gpu_preflight(PIPELINE_PYTHON, current, WORKER_ENV)
     return ops.stream_command(command, env=WORKER_ENV)
 """)
-md(
-    "## 4b. Smoke input / language model\nheadは先頭50,000行を高速に抽出します。randomは固定seedのreservoir samplingで全入力を走査するため時間がかかります。既存の手動smoke入力もデフォルトで保持します。"
-)
+md("""## 4b. 入力と言語判定モデルを準備する
+
+初回フィルタリングの前に実行します。smokeでは入力を抽出し、両モードで入力の存在と設定を確認してfastTextモデルを用意します。
+""")
 code("""
 config = read_active_config()
 ops.validate_run(RUN_MODE, CONFIG, config, LAYOUT)
@@ -144,61 +162,83 @@ if not Path(config['paths']['input']).is_file():
 run_stage('validate-config')
 run_stage('download-lid')
 """)
-md(
-    "## 5. CPU filtering\n実行中にGPUは不要です。完了後にランタイムをGPUへ変更してもDriveから再開できます。"
-)
+md("""## 5. CPUでフィルタリングする
+
+正規化、ルール・発話らしさの判定、完全重複除去まで進めます。完了後にL4へ切り替える場合は、**0〜4 → 6** と進みます。
+""")
 code("run_stage('run', '--resume', '--until', 'exact-dedup')")
-md(
-    "## 6. GPU / Bicleaner preflight\nnvidia-smi、workerのcuda_available()、Bicleaner CLIとversionを表示します。device=cudaでGPUを使えなければ停止します。scoring起動直前にも再検査します。"
-)
+md("""## 6. スコアリング環境を確認する
+
+GPUの検出結果と、処理用Pythonから見えるCUDA・Bicleaner CLIを確認します。`device: cuda` でGPUを使えない場合はここで停止します。
+""")
 code("""
 config = read_active_config()
 ops.validate_run(RUN_MODE, CONFIG, config, LAYOUT)
 ops.gpu_preflight(PIPELINE_PYTHON, config, WORKER_ENV)
 """)
-md(
-    "## 7. Bicleaner-AI scoring\n完全一致の正規化文対は前段で除外済みです。100kごとにthroughput / ETAを表示。初回モデルdownloadには時間がかかります。L4を必須にする場合はconfigのdeviceをcudaに設定してください。再現実験ではREADMEのsnapshot固定手順を使ってください。"
-)
+md("""## 7. Bicleaner-AIで採点する
+
+候補を採点し、進捗と残り時間の目安を表示します。初回はモデルを取得します。中断後は手順0〜4と6を実行し、ここから再開します。
+""")
 code("run_stage('score', '--resume')")
-md("## 8. Deduplication and length-aware final selection")
+md("""## 8. 文対を選抜する
+
+片側重複を除き、文長区分ごとに選抜します。成果物は作業先の `outputs/selected/selected.parquet` です。
+""")
 code("""
 run_stage('select', '--resume')
 # target_size is saved in the Drive config; changing it preserves inference shards.
 """)
-md(
-    "## 9. Manual audit\n採用500件・不採用200件をDriveへ保存します。原文はNotebook出力に表示しません。"
-)
+md("""## 9. 人手確認用のサンプルを作る
+
+既定で採用500件・不採用200件のCSVを `outputs/audit/` に保存します。
+""")
 code("""
 run_stage('audit', '--resume')
-print('Review:', Path(config['paths']['work_dir']) / 'outputs/audit')
+print('Review:', WORK / 'outputs/audit')
 """)
-md(
-    "## 10. Lightweight statistics and figures\n完了済みcheckpointから統計だけを生成します。Pipelineは起動せず、前半stage・scoring全体のParquetは走査しません。GPUは不要です。"
-)
+md("""## 10. 選抜結果を集計する
+
+完了済みのチェックポイントから通過件数と分布を集計します。CPUで実行でき、レポートと図は `outputs/stats/` に保存します。
+""")
 code("""
 config = read_active_config()
 ops.validate_run(RUN_MODE, CONFIG, config, LAYOUT)
 command = [PIPELINE_PYTHON, str(REPO_DIR / 'scripts/generate_lightweight_stats.py'),
            '--config', str(CONFIG), '--resume']
 ops.stream_command(command, env=WORKER_ENV)
-import json
 from IPython.display import Image, display
 STATS = Path(config['paths']['work_dir']) / 'outputs/stats'
-summary = json.loads((STATS / 'stats.json').read_text())
-print(json.dumps({'stages': summary['stages'], 'shortfall': summary['shortfall']}, indent=2))
-print(json.dumps(summary['length_bins'], ensure_ascii=False, indent=2))
+summary = json.loads((STATS / 'stats.json').read_text(encoding='utf-8'))
+print(f"選抜 {summary['selected_size']:,} / 目標 {summary['target_size']:,} 文対")
+print('レポート', STATS / 'report.md')
 for name in ['stage_retention.png', 'selected_ja_length.png', 'selected_en_words.png',
              'selected_bicleaner_scores.png', 'length_bin_comparison.png',
              'candidate_bicleaner_scores.png', 'reject_reasons.png']:
     display(Image(filename=str(STATS / name)))
 """)
-md("""## Reconnect / rerun
-同じDriveをmountしてconfigを再利用してください。完了stageと完了shardは検証後skipされます。
-RUN_MODEを再設定し、Drive → repo → worker → config選択を再実行してください。
-CPU filtering済みならGPUへ切り替えた後はGPU preflight → score --resumeから再開できます。
-`--force speech-filter --resume` で該当stageと後続を再計算できます。
-同じwork_dirへ複数ランタイムから同時書込しないでください。
-公開前に **Edit → Clear all outputs** を実行してください。データ・監査CSVをGitへ追加しないでください。
+md("""## 11. 学習用JSONLを出力する
+
+本番の選抜済み30万文対を、元の `pair_id` を保ったまま **train 298,000件・dev 2,000件** に分けます。seedは42です。手順0〜4で本番設定を読み込めば、選抜済みParquetから直接実行できます。
+
+`outputs/text-corpus/manifest.jsonl` と `summary.json` をDriveに保存します。
+""")
+code("""
+if RUN_MODE == 'production':
+    config = read_active_config()
+    ops.validate_run(RUN_MODE, CONFIG, config, LAYOUT)
+    ops.stream_command([
+        PIPELINE_PYTHON, str(REPO_DIR / 'scripts/export_text_corpus.py'),
+        '--config', str(CONFIG), '--seed', '42',
+    ], env=WORKER_ENV)
+else:
+    print('手順11は本番の選抜済み30万文対向けです。')
+""")
+md("""## 再開と保存
+
+切断後は手順0〜4で同じDriveと設定を読み込み、続きの工程を実行します。`--resume` が完了済みのチェックポイントを検証して再利用します。ランタイム終了前にDriveの同期を待ってください。
+
+成果物はDriveで管理し、ノートブックを共有する際は **編集 → すべての出力を消去** を実行してください。
 """)
 
 for i, cell in enumerate(cells):
