@@ -83,6 +83,12 @@ uv run python scripts/validate_notebook.py
 
 Edit the notebook generator and regenerate the Colab notebook with the commands above. Local validation scope and results are documented separately. [Notebook generator](scripts/build_notebook.py) · [Verification notes (Japanese)](docs/verification.md)
 
+## Reference
+
+The filtering approach in this repository was developed with reference to the following paper on JParaCrawl v3 corpus filtering.
+
+- 酒井大樹, 宇津呂武仁, and 永田昌明. 2024. 多言語モデルを用いた日英対訳文集合のフィルタリング手法の分析. *Proceedings of the 30th Annual Meeting of the Association for Natural Language Processing (NLP 2024).* [Paper (Japanese, PDF)](https://www.anlp.jp/proceedings/annual_meeting/2024/pdf_dir/B1-5.pdf)
+
 ## License and data
 
 The software is licensed under the MIT License. [LICENSE](LICENSE)
