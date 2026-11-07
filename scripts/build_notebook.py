@@ -30,7 +30,7 @@ JParaCrawl v3から発話に適した文対を選び、DriveにParquetと学習�
 
 初回処理では、展開済みの `en-ja.bicleaner05.txt` をDriveの `MyDrive/jparacrawl/v3/en-ja/` に置きます。本番のBicleaner採点にはL4を想定しています。手順5をCPUで済ませてから、GPUに切り替えられます。
 
-[リポジトリと入力データの案内](https://github.com/Yaaamashiro/jparacrawl-filtering#colabで使う)
+[リポジトリと入力データの案内](https://github.com/Yaaamashiro/jparacrawl-filtering#using-google-colab)
 """)
 md("""## 0. 実行モードを選ぶ
 

@@ -1,52 +1,52 @@
 # JParaCrawl Filtering
 
-JParaCrawl v3の日英対訳から、Direct Speech-to-Speech Translation研究向けの学習コーパスを作ります。対訳の品質と発話らしさで絞り込み、日本語30〜99文字の文を中心に **30万文対** を選びます。
+Build a Japanese–English training corpus for Direct Speech-to-Speech Translation research from JParaCrawl v3. The pipeline filters for translation quality and natural, sentence-like text, then selects **300,000 sentence pairs**, primarily with Japanese sentences of 30–99 characters.
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Yaaamashiro/jparacrawl-filtering/blob/main/notebooks/jparacrawl_filtering_colab.ipynb)
 
-- **選抜** — 正規化・ルール判定 → 完全重複除去 → Bicleaner-AI → 片側重複除去 → 文長別の割り当て
-- **再開** — Driveに保存したチェックポイントを使って処理を継続
-- **出力** — 選抜済みParquet、確認用CSV、集計レポート、学習用JSONL
+- **Selection** — Normalization and rule filtering → exact pair deduplication → Bicleaner-AI → one-side deduplication → length-bin selection
+- **Resume** — Continue from checkpoints stored on Google Drive
+- **Outputs** — Selected Parquet, audit CSVs, statistical reports, and training JSONL
 
-## Colabで使う
+## Using Google Colab
 
-1. JParaCrawl v3.0の **English–Japanese training set** を入手します。[NTT公式配布ページ](https://www.kecl.ntt.co.jp/icl/lirg/jparacrawl/)
-2. 配布アーカイブを展開し、`en-ja.bicleaner05.txt` をDriveの `MyDrive/jparacrawl/v3/en-ja/` に置きます。
-3. ノートブックを開き、目的に合う手順を実行します。番号はノートブックの見出しに対応します。
+1. Download the **English–Japanese training set** from JParaCrawl v3.0. [Official NTT download page](https://www.kecl.ntt.co.jp/icl/lirg/jparacrawl/)
+2. Extract the archive and place `en-ja.bicleaner05.txt` in `MyDrive/jparacrawl/v3/en-ja/` on Google Drive.
+3. Open the notebook using the badge above and follow the steps for your task. Step numbers match the notebook headings.
 
-| 目的 | 実行する手順 |
+| Task | Notebook steps |
 | --- | --- |
-| 初回の本番処理 | 0〜4bで準備 → 5でCPUフィルタリング → 6〜7でGPU確認とスコアリング → 8で選抜 |
-| 小規模に動作確認 | 0で `RUN_MODE = 'smoke'` を選び、1〜8を実行 |
-| 切断・GPUへの切り替え後 | 0〜4で同じ設定を読み込み、続きの手順へ。スコアリングから再開する場合は6〜7 |
-| 選抜結果を確認 | 9で監査サンプル、10で軽量集計 |
-| **選抜済みParquetをJSONLに変換** | **0〜4 → 11**。CPUランタイムで実行可能 |
+| First production run | 0–4b for setup → 5 for CPU filtering → 6–7 for GPU checks and scoring → 8 for selection |
+| Small smoke test | Set `RUN_MODE = 'smoke'` in step 0, then run steps 1–8 |
+| Reconnect or switch to a GPU runtime | Run steps 0–4 with the same configuration, then continue. Use steps 6–7 to resume scoring |
+| Inspect selection results | 9 for audit samples, 10 for lightweight statistics |
+| **Export selected Parquet to JSONL** | **0–4 → 11**. Works on a CPU runtime |
 
-本番のスコアリングにはNVIDIA L4を想定しています。ノートブックは処理用のPython 3.11環境を用意します。既定モードは `production` です。`smoke` は別の入力と作業先を使い、既定では先頭5万行から最大5,000文対を選びます。
+Production scoring targets an NVIDIA L4. The notebook sets up a separate Python 3.11 worker environment. The default run mode is `production`. Smoke mode uses separate input and work directories and selects up to 5,000 pairs from the first 50,000 input lines by default.
 
-本番の設定と成果物は `MyDrive/jparacrawl-filtering/` に保存されます。モードを切り替えたら手順4で設定を選び直します。入力・設定・再開条件の詳細は[運用リファレンス](docs/reference.md)を参照してください。
+Production configuration and outputs are stored in `MyDrive/jparacrawl-filtering/`. After changing run modes, rerun step 4 to select the configuration. Input formats, settings, and resume behavior are covered in the operational reference, currently in Japanese. [Operational reference](docs/reference.md)
 
-## 成果物
+## Outputs
 
-| 作業ディレクトリからのパス | 内容 |
+| Path relative to the work directory | Contents |
 | --- | --- |
-| `outputs/selected/selected.parquet` | 最終選抜の文対。原文、正規化済みテキスト、ID、スコアを収録 |
-| `outputs/audit/*.csv` | 採用・不採用から抽出した人手確認用の文対 |
-| `outputs/stats/report.md` | 通過件数、除外理由、文長・スコアの分布。CSV・JSON・PNGも同じディレクトリに保存 |
-| `outputs/text-corpus/manifest.jsonl` | 学習用の文対と `train` / `dev` の割り当て |
-| `outputs/text-corpus/summary.json` | 件数、採用したテキスト列、入力・出力のSHA256、文長区分別の分割件数 |
+| `outputs/selected/selected.parquet` | Selected pairs with raw and normalized text, IDs, and scores |
+| `outputs/audit/*.csv` | Accepted and rejected samples for manual review |
+| `outputs/stats/report.md` | Stage retention, rejection reasons, and length and score distributions. CSV, JSON, and PNG files are saved alongside the report |
+| `outputs/text-corpus/manifest.jsonl` | Training pairs with `train` / `dev` assignments |
+| `outputs/text-corpus/summary.json` | Counts, text field names, source and output SHA256 hashes, and split counts by length bin |
 
-### 学習用JSONL
+### Training JSONL
 
-手順11は選抜済み30万文対を読み、既定のseed `42` で **train 298,000件・dev 2,000件** に分けます。各文長区分の比率に合わせてdevを選び、元の `pair_id` を引き継ぎます。`training_text` に従って正規化済みテキストまたは原文を出力します。同じ入力と設定・seedで再実行すると同じJSONLになります。
+Step 11 splits the selected 300,000 pairs into **298,000 training pairs and 2,000 development pairs**, using seed `42` by default. The development split is stratified by length bin, and each pair retains its original `pair_id`. The `training_text` setting determines whether raw or normalized text is exported. Identical input, settings, and seed produce identical JSONL.
 
 ```json
 {"pair_id":"p000012345678","split":"train","ja_text":"これは例文です。","en_text":"This is an example.","corpus":"jparacrawl_v3_filtered","length_bin":2,"bicleaner_score":0.998,"source_line":12345678}
 ```
 
-## ローカルで使う
+## Local usage
 
-Python 3.11または3.12と `uv` を使います。CPU工程と合成データの動作確認はWindows / Linuxに対応します。Bicleaner-AIを使う場合はLinux / Colabで `--extra scoring` を追加します。
+Use Python 3.11 or 3.12 with `uv`. CPU stages and the synthetic demo support Windows and Linux. To use Bicleaner-AI, add `--extra scoring` on Linux or Colab.
 
 ```bash
 git clone https://github.com/Yaaamashiro/jparacrawl-filtering.git
@@ -55,7 +55,7 @@ uv sync --locked --extra lid --extra dev
 uv run python scripts/synthetic_demo.py
 ```
 
-実データ処理では [configs/default.yaml](configs/default.yaml) をコピーし、入力・作業先・モデルのパスを環境に合わせます。下の例ではコピーを `config.yaml` としています。
+For a real-data run, copy the default configuration and adjust the input, work directory, and model paths for your environment. The following commands assume that your copy is named `config.yaml`. [Default configuration](configs/default.yaml)
 
 ```bash
 uv run python -m jparacrawl_filtering validate-config --config config.yaml
@@ -63,16 +63,16 @@ uv run python -m jparacrawl_filtering download-lid --config config.yaml
 uv run python -m jparacrawl_filtering run --config config.yaml --resume --until exact-dedup
 ```
 
-選抜済み成果物から統計やJSONLだけを生成する場合は、既存の設定ファイルを指定します。
+To generate statistics or JSONL from completed selection results, use the existing configuration file.
 
 ```bash
 uv run python scripts/generate_lightweight_stats.py --config config.yaml --resume
 uv run python scripts/export_text_corpus.py --config config.yaml --seed 42
 ```
 
-設定、CLI、再開の詳細は[運用リファレンス](docs/reference.md)にまとめています。
+See the operational reference for configuration, CLI commands, and checkpoint behavior. [Operational reference (Japanese)](docs/reference.md)
 
-## 開発
+## Development
 
 ```bash
 uv run pytest -q
@@ -81,10 +81,10 @@ uv run python scripts/build_notebook.py
 uv run python scripts/validate_notebook.py
 ```
 
-Colabノートブックの編集元は [scripts/build_notebook.py](scripts/build_notebook.py) です。ローカルでの確認範囲と実行結果は[検証記録](docs/verification.md)に記載しています。
+Edit the notebook generator and regenerate the Colab notebook with the commands above. Local validation scope and results are documented separately. [Notebook generator](scripts/build_notebook.py) · [Verification notes (Japanese)](docs/verification.md)
 
-## ライセンスとデータ
+## License and data
 
-ソフトウェアはMIT Licenseです。[LICENSE](LICENSE)
+The software is licensed under the MIT License. [LICENSE](LICENSE)
 
-JParaCrawlの原データと派生成果物を扱う際は、公式配布元の利用条件と元のWebコンテンツの権利を確認してください。原データ、派生データ、監査CSV、チェックポイントは利用者の環境で管理します。モデルにはそれぞれの利用条件が適用されます。[JParaCrawl公式配布ページ](https://www.kecl.ntt.co.jp/icl/lirg/jparacrawl/)
+When using JParaCrawl or derived corpora, review the distribution terms and the rights associated with the original web content. Keep source data, derived corpora, audit CSVs, and checkpoints in your own environment. Models are subject to their respective terms. [Official JParaCrawl page](https://www.kecl.ntt.co.jp/icl/lirg/jparacrawl/)
