@@ -24,7 +24,7 @@ Build a Japanese–English training corpus for Direct Speech-to-Speech Translati
 
 Production scoring targets an NVIDIA L4. The notebook sets up a separate Python 3.11 worker environment. The default run mode is `production`. Smoke mode uses separate input and work directories and selects up to 5,000 pairs from the first 50,000 input lines by default.
 
-Production configuration and outputs are stored in `MyDrive/jparacrawl-filtering/`. After changing run modes, rerun step 4 to select the configuration. Input formats, settings, and resume behavior are covered in the operational reference, currently in Japanese. [Operational reference](docs/reference.md)
+Production configuration and outputs are stored in `MyDrive/jparacrawl-filtering/`. After changing run modes, rerun step 4 to select the configuration. Input formats, settings, and resume behavior are covered in the operational reference. [Operational reference](docs/reference.md)
 
 ## Outputs
 
@@ -70,7 +70,7 @@ uv run python scripts/generate_lightweight_stats.py --config config.yaml --resum
 uv run python scripts/export_text_corpus.py --config config.yaml --seed 42
 ```
 
-See the operational reference for configuration, CLI commands, and checkpoint behavior. [Operational reference (Japanese)](docs/reference.md)
+See the operational reference for configuration, CLI commands, and checkpoint behavior. [Operational reference](docs/reference.md)
 
 ## Development
 
@@ -81,7 +81,7 @@ uv run python scripts/build_notebook.py
 uv run python scripts/validate_notebook.py
 ```
 
-Edit the notebook generator and regenerate the Colab notebook with the commands above. Local validation scope and results are documented separately. [Notebook generator](scripts/build_notebook.py) · [Verification notes (Japanese)](docs/verification.md)
+Edit the notebook generator and regenerate the Colab notebook with the commands above. Local validation scope and results are documented separately. [Notebook generator](scripts/build_notebook.py) · [Verification notes](docs/verification.md)
 
 ## Reference
 

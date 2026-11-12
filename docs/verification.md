@@ -2,70 +2,68 @@
 
 ## Text corpus export
 
-Windows CPU環境の合成データで検証しました。本番Driveのconfig / selected.parquetは取得しておらず、実際のtraining_textとfield整合性は利用者のexport実行時に確認します。
+Verification used synthetic data on a Windows CPU environment. The exporter checks `training_text` and the source fields against the production configuration and selected Parquet when it runs.
 
-- Python 3.11 / 3.12でpytest各128件成功。ruff / formatとNotebook静的検証も成功。
-- 合成300,000文対を独立scriptで2回exportし、train=298,000 / dev=2,000 / test=0、devのbin件数40 / 300 / 800 / 660 / 200、出力SHA256一致を確認。入力ParquetのSHA256・size・mtimeも不変。
-- unit testで最大剰余法の件数・同率処理、seed再現性、seed変更時のdev変更、IDの保持・一意性、text leakage拒否、空文拒否、原文field設定の尊重、追加metadataを検証。
-- 実Pipelineが生成した合成selected.parquetのschema・export manifest・select generationとの互換性を確認。configのtraining_textがcheckpointと異なる場合は停止。
-- subprocessでpackageをimportせずCLI実行できることを確認。成功・検証失敗時に既存selected / audit / config等を変更せず、出力はtext-corpusのみ。
-- `src/`、既存Notebook、pipeline / scoring / stats / bootstrap / default config / uv.lockは変更していません。
+- All 128 pytest tests passed on both Python 3.11 and 3.12. Ruff lint and format checks and static notebook validation also passed.
+- Two standalone exports of 300,000 synthetic pairs each produced 298,000 train, 2,000 dev, and zero test pairs. The dev bin counts were 40 / 300 / 800 / 660 / 200. Both exports had the same SHA256 hash, and the input Parquet retained its original hash, size, and modification time.
+- Unit tests covered largest-remainder allocation and ties, reproducibility with the same seed, dev membership changes with a different seed, ID preservation and uniqueness, rejection of text leakage and empty text, configured text fields, and additional metadata.
+- The exporter worked with the schema, export manifest, and select generation produced by the pipeline on synthetic data. It stopped when the configuration's `training_text` differed from the checkpoint.
+- The CLI ran in a subprocess without importing the pipeline package. Both successful exports and validation failures preserved existing selected data, audit files, and configuration. Export writes were confined to the text corpus directory.
+- The export change was scoped to the standalone exporter, its tests, and documentation.
 
 ## Lightweight statistics (2026-10-30)
 
-Python 3.11 / 3.12でpytest各113件成功。ruff、Notebook schema / セル構文 / 保存outputなしも確認しました。以下は合成データによるローカル検証で、Drive本番データを再走査した結果ではありません。
+All 113 pytest tests passed on both Python 3.11 and 3.12. Ruff and notebook schema, cell syntax, and output-free checks also passed. These were local tests with synthetic data.
 
-- 16,668,661行相当のscore manifestを作り、accepted=0の巨大tailとnormalize / rule-filter / speech-filter / exact-dedup / scoring / select stageのParquetを存在させずに統計生成に成功。
-- 開くParquetはscoreの採用ありpart、dedupの採用ありpart、selected exportのみと検証。本文列を含めず、統計用4列（候補ではacceptedも）をbatchで読み、混在partの不採用行を除外。
-- manifest件数・複数reject理由の合計、3段階のlength-bin分布、30万件の目標quota、selectedのexact quantile、各PNG出力を確認。
-- 実Pipelineが生成したsynthetic checkpoint treeでもidentityとselected exportの互換性を確認。新scriptはsubprocess内でpackageをimportせず実行。
-- 完了manifestが最後に作られること、失敗した上書きでは完了markerを残さないこと、resume時は出力checksum検証だけでParquetを開かないことを確認。
-- config不一致・不完全generation・upstream混在・export混在・物理行数110万件超を本文走査前に拒否。実行中のsource変更も完了前に拒否。
-- 成功時・失敗時とも、data / checkpoints / selected / audit / models / configの内容とmtimeが変わらないことを確認。`git diff 74a0029 -- src scripts/bootstrap_colab.py configs/default.yaml uv.lock` に差分なし。
-- Notebookセル10がpipeline CLIのstatsを呼ばず、workerで専用scriptを実行することを検証。
+- Generated statistics from a score manifest representing 16,668,661 rows. The fixture omitted Parquet files for the large tail with zero accepted rows and for the normalize, rule-filter, speech-filter, exact-dedup, scoring, and select stages.
+- Verified that the script opened only score and dedup parts containing accepted rows and the selected export. It read four statistics columns in batches, plus `accepted` for candidates, and excluded rejected rows from mixed parts.
+- Verified manifest counts, totals for multiple rejection reasons, length-bin distributions for all three groups, quotas for a 300,000-pair target, exact quantiles for selected pairs, and all PNG outputs.
+- Verified checkpoint identity and selected-export compatibility with a synthetic checkpoint tree produced by the pipeline. The statistics script ran in a subprocess without importing the pipeline package.
+- Verified that the completion manifest was written last, a failed overwrite left no completion marker, and resume validated output checksums without opening Parquet files.
+- Verified that configuration mismatches, incomplete generations, mixed upstream generations or exports, and reads above 1.1 million physical rows were rejected before scanning data. Source changes during a run also prevented completion.
+- Checked that file contents and modification times in the data, checkpoints, selected, audit, models, and configuration paths were preserved on success and failure. `git diff 74a0029 -- src scripts/bootstrap_colab.py configs/default.yaml uv.lock` showed no changes.
+- Verified that notebook step 10 invoked the dedicated statistics script through the worker environment.
 
-利用者から本番score processed=16,668,661 / accepted=1,000,000、dedup accepted=977,822、select accepted=300,000、audit完了の報告を受けています。本修正では本番Driveや実データにアクセスしていません。
+The user reported 16,668,661 pairs processed during production scoring, 1,000,000 score candidates, 977,822 pairs accepted after deduplication, 300,000 selected pairs, and a completed audit. The local verification used only synthetic data.
 
 ## Earlier pipeline verification (2026-10-29)
 
-2026-10-29にWindows CPU環境で実施。JParaCrawl実文はテストに使用していません。
+Tests ran on a Windows CPU environment using synthetic sentence pairs.
 
-| 確認 | 結果 |
+| Check | Result |
 | --- | --- |
-| Python 3.11環境 | uv.lockから独立した環境を作成し、pytest 99件成功 |
-| Python 3.12環境 | pip editable install、pytest 99件成功 |
-| Python 3.13のホスト | WindowsのPython 3.13.14からbootstrapを実行し、ロック済みCPU依存をPython 3.11.18の独立環境へ導入。3.13へ本体依存を導入せず実行できることを確認 |
-| Notebook環境分離 | stage CLI・config処理・GPU確認を処理用Pythonへ渡すこと、カーネルから本体やYAML等をimportしないこと、pip fallbackも対応版の処理環境へ限定することをテスト |
-| Colab mode safety | smoke / productionの実パス照合、configの保持、モード変更後の古い変数の拒否、各長時間stage直前のpreflightを検証 |
-| Colab sampling | head抽出、固定seedのreservoir sampling再現性、既存手動sampleの保持、sampling設定変更時の明示的な再作成要求を確認 |
-| Colab realtime logs | mockと実subprocessでstdout / stderrの逐次表示、非ゼロreturn codeの例外、scoring進捗行の表示を確認 |
-| GPU bootstrap / preflight | nvidia-smiをmockし、GPU有無によるextras選択と、cuda指定で4項目のいずれかが欠けた場合の停止を検証 |
-| Synthetic smoke isolation | mode-specific configでnormalize → rule-filter → speech-filter → exact-dedupまで実行。production入力・config・出力treeの内容が一切変わらないことを確認 |
-| Python 3.13の運用ヘルパー | Python 3.13.18でcolab_opsをimportし、本体・PyYAML・fastText・TensorFlow・PyArrowをカーネルへimportしないことを確認 |
-| 合成データ全工程 | normalize → rule → speech → exact pair dedup → score double → one-side dedup → select → audit → statsが完了 |
-| Resume | 完了generationと推論途中のshardを再利用、出力同一性を確認 |
-| 設定変更 / force | target・candidate変更で推論再利用、前stageのforceで子孫を更新 |
-| 破損checkpoint | SHA256不一致で停止、forceで別generationを生成 |
-| CPU言語判定 | 公式lid.176.ftzとfasttext-wheelを使用し、16件の自作文対に実行。rule通過8件、speech通過7件、exact pair dedup通過6件。再実行時のskipも確認 |
-| 300k selection | 310,000件をgeneratorで供給し、300,000件を選択。SQLiteを使用、全件list化なし |
-| Bicleaner CLI仕様 | 公式PyPIの3.6 wheelで必要な引数とentry pointを確認 |
-| GPU / OOM / CPU fallback | subprocess test doubleで引数・環境変数・batch半減・autoのCPU再試行・cudaの停止を確認 |
-| 推論前の完全重複除去 | 完全一致だけを除外し、片側一致の別訳は両方scoreへ渡す。上位candidate枠の浪費解消と、高scoreの別訳が後段で残ることを確認 |
-| 完全重複除去の途中再開 | SQLite既出集合を入力から再構築し、保存済みshardを再利用。shard境界を越える重複の再検出を確認 |
-| CPU import | TensorFlow・PyTorch・fastTextをimportせずCLIをimport可能 |
-| Notebook | nbformat schema、各セルのPython構文、保存outputなしを確認 |
-| Figures | 5種類のPNGを生成。score・理由・selected比較図のラベルと余白を目視確認 |
-| Git ignore | data / outputs / audit / checkpoint / model / log / TSV / Parquet等が追跡候補から除外されることを確認 |
-| Package build | sdist / wheelの作成に成功。sdist内に実データ・モデル・cache・検証出力がないことを確認 |
-| 配布入力形式 | NTT公式v3アーカイブをstreamで開き、先頭recordが5列であること、列3が英文・列4が和文（0-based）であることを確認。原文の保存・表示はなし |
+| Python 3.11 | Created an isolated environment from `uv.lock` and passed 99 pytest tests |
+| Python 3.12 | Installed the package in editable mode with pip and passed 99 pytest tests |
+| Python 3.13 host | Ran bootstrap from Python 3.13.14 on Windows and installed locked CPU dependencies in an isolated Python 3.11.18 environment |
+| Notebook environment isolation | Checked that the worker handles stage commands, configuration, GPU checks, and pip fallback, while the notebook kernel stays free of pipeline and YAML imports |
+| Colab run modes | Checked path validation for smoke and production, preservation of existing configuration, rejection of stale settings after a mode switch, and preflight checks before long-running stages |
+| Colab sampling | Checked head sampling, reproducible fixed-seed reservoir sampling, preservation of manually prepared samples, and explicit rebuilds when sampling settings change |
+| Colab live logs | Used mocks and real subprocesses to check streamed stdout and stderr, errors for nonzero exit codes, and scoring progress lines |
+| GPU bootstrap and preflight | Mocked `nvidia-smi` to test dependency selection based on GPU availability and failure when any of the four required CUDA checks was missing |
+| Synthetic smoke isolation | Ran normalize → rule-filter → speech-filter → exact-dedup with smoke settings and verified that production inputs, configuration, and outputs were preserved |
+| Python 3.13 notebook helpers | Imported `colab_ops` on Python 3.13.18 and verified that it did not load the pipeline, PyYAML, fastText, TensorFlow, or PyArrow into the kernel |
+| Synthetic end-to-end run | Completed normalize → rule filtering → speech filtering → exact pair deduplication → scoring with a test double → one-side deduplication → selection → audit → statistics |
+| Resume | Reused completed generations and saved inference shards from an interrupted run. Verified identical outputs |
+| Configuration changes and force | Reused inference after changing target or candidate counts. Rebuilt downstream stages after forcing an upstream stage |
+| Corrupt checkpoint | Stopped on a SHA256 mismatch. Forcing the stage created a new generation |
+| CPU language identification | Ran the official `lid.176.ftz` model with `fasttext-wheel` on 16 original synthetic pairs. Eight passed rule filtering, seven passed speech filtering, and six passed exact pair deduplication. A rerun skipped completed work |
+| 300k selection | Selected 300,000 pairs from 310,000 generator-supplied pairs using SQLite without loading the full input into a list |
+| Bicleaner CLI | Verified required arguments and entry point against the official PyPI wheel for version 3.6 |
+| GPU, out-of-memory handling, and CPU fallback | Used a subprocess test double to verify arguments, environment variables, batch size halving, CPU retries in `auto` mode, and stopping in `cuda` mode |
+| Exact deduplication before inference | Removed exact matches and passed both translations of a one-side match to scoring. This freed candidate slots and let the higher-scoring translation survive downstream selection |
+| Exact deduplication resume | Rebuilt the SQLite set of seen pairs from the input, reused saved shards, and detected duplicates across shard boundaries |
+| CPU imports | Imported the CLI without loading TensorFlow, PyTorch, or fastText |
+| Notebook | Validated the nbformat schema and Python cell syntax and checked that no outputs were saved |
+| Figures | Generated five PNGs and visually inspected labels and margins in the score, rejection reason, and selection comparison plots |
+| Git ignore rules | Verified that data, outputs, audit files, checkpoints, models, logs, TSV, and Parquet files were ignored |
+| Package build | Built an sdist and wheel and verified that the sdist excluded real data, models, caches, and verification outputs |
+| Distributed input format | Streamed the official NTT v3 archive and verified that the first record had five columns, with English in column 3 and Japanese in column 4 using zero-based indexing. The text was neither saved nor displayed |
 
-この結果はBicleanerの品質評価やL4性能の実測ではありません。合成demoのスコアはtest doubleで、学習データ選定の根拠には使えません。
-
-実BicleanerモデルのCPU / GPU推論、NVIDIA L4の速度・VRAM使用量、ColabのDrive mountと切断後の再同期、JParaCrawl全量からの30万件抽出はローカルでは未検証です。Colab Notebookで確認してください。Notebookのclone先URLは `Yaaamashiro/jparacrawl-filtering` に設定済みです。
+Synthetic demo scores came from a test double. Real Bicleaner CPU and GPU inference, NVIDIA L4 throughput and VRAM usage, Colab Drive mounting and synchronization after a disconnect, and selection of 300,000 pairs from the full corpus are outside the scope of these local checks. Use the Colab notebook to validate those runs. Its repository URL is set to `Yaaamashiro/jparacrawl-filtering`.
 
 ## User-reported Colab smoke result
 
-以下は利用者から報告された既存の実データsmoke結果です。今回ローカルで再計測した数値ではありません。
+The following counts were reported by the user for a Colab smoke run on real data.
 
 | Stage | Input / accepted | Rejected |
 | --- | ---: | ---: |
@@ -76,9 +74,9 @@ Python 3.11 / 3.12でpytest各113件成功。ruff、Notebook schema / セル構�
 | Bicleaner processed | 21,923 | — |
 | Top candidates | 10,000 | 11,923 |
 
-NVIDIA L4（23034 MiB）、Bicleaner-AI 3.6、GPU実行で約133 pairs/sec、return code 0。大量の完全重複除去はこの入力の観測結果であり、運用改修のために除去規則を変更していません。`src/`、既存bootstrap、default config、uv.lockは今回の変更対象外です。Colab/Drive上の実データ・checkpointへエージェントからの変更は行っていません。
+The reported run used an NVIDIA L4 with 23,034 MiB of VRAM and Bicleaner-AI 3.6. GPU scoring reached approximately 133 pairs per second and exited with code 0. The exact duplicate count reflects this input. The operational changes were outside the deduplication rules, pipeline source, existing bootstrap, default configuration, and dependency lockfile. The reported data and checkpoints were managed in the user's Colab and Drive environment.
 
-再実行コマンド:
+## Reproduce the local checks
 
 ```bash
 uv sync --locked --extra lid --extra dev

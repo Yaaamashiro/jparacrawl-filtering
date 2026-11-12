@@ -518,8 +518,15 @@ def generate(config_path, resume=False):
             "bicleaner_score": {"width": 0.02, "bins": 50, "last_bin_includes": 1.0},
         },
         "omissions": {
-            "full_scoring": f"全{metadata['scoring']['counts']['input']:,}件のスコア分布は、巨大なDrive再走査を避けるため再計算していない。上位候補および最終採用データの分布はexactである。",
-            "early_lengths": "normalize / rule-filter等のlength histogramは省略。残存件数はmanifestのみから算出。",
+            "full_scoring": (
+                f"The report uses manifest totals for the full set of "
+                f"{metadata['scoring']['counts']['input']:,} scored pairs to avoid rescanning "
+                "the scoring data on Drive."
+            ),
+            "early_lengths": (
+                "Stage retention comes from manifest counts. Length histograms cover candidates, "
+                "deduplicated candidates, and selected pairs."
+            ),
         },
     }
     log("Writing figures...")

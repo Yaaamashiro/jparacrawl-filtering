@@ -16,28 +16,28 @@ def code(text):
     cells.append(nbf.v4.new_code_cell(text.strip()))
 
 
-md("""# JParaCrawlの日英対訳を選抜する
+md("""# Filter Japanese–English sentence pairs from JParaCrawl
 
-JParaCrawl v3から発話に適した文対を選び、DriveにParquetと学習用JSONLを保存します。
+Select sentence pairs suitable for speech from JParaCrawl v3 and save the Parquet and training JSONL files to Google Drive.
 
-| 目的 | 実行する手順 |
+| Task | Notebook steps |
 | --- | --- |
-| 初回の本番処理 | **0〜4b** 準備 → **5** フィルタリング → **6〜7** GPU確認と採点 → **8** 選抜 |
-| 小規模に試す | **0** で `smoke` を選択 → **1〜8** |
-| 切断・ランタイム切り替え後 | **0〜4** で同じ設定を読み込み、続きの手順へ |
-| 選抜結果を確認 | **9** 監査サンプル、**10** 軽量統計 |
-| **選抜済みParquetをJSONLへ変換** | **0〜4 → 11**。CPUで実行できます |
+| First production run | **0–4b** for setup → **5** for filtering → **6–7** for GPU checks and scoring → **8** for selection |
+| Small smoke test | Select `smoke` in step **0**, then run **1–8** |
+| Reconnect or switch runtimes | Run **0–4** with the same configuration, then continue from the next step |
+| Inspect selection results | **9** for audit samples, **10** for lightweight statistics |
+| **Export selected Parquet to JSONL** | **0–4 → 11**. Works on a CPU runtime |
 
-初回処理では、展開済みの `en-ja.bicleaner05.txt` をDriveの `MyDrive/jparacrawl/v3/en-ja/` に置きます。本番のBicleaner採点にはL4を想定しています。手順5をCPUで済ませてから、GPUに切り替えられます。
+Before your first run, place the extracted `en-ja.bicleaner05.txt` in `MyDrive/jparacrawl/v3/en-ja/` on Google Drive. Production Bicleaner scoring targets an NVIDIA L4. You can complete step 5 on a CPU runtime before switching to a GPU.
 
-[リポジトリと入力データの案内](https://github.com/Yaaamashiro/jparacrawl-filtering#using-google-colab)
+[Repository and input data instructions](https://github.com/Yaaamashiro/jparacrawl-filtering#using-google-colab)
 """)
-md("""## 0. 実行モードを選ぶ
+md("""## 0. Choose a run mode
 
-- `production`（既定）で本番の設定と成果物を使います。
-- `smoke` では別の作業先に小規模な入力を作ります。`head` は先頭行、`random` は入力全体から固定seedで抽出します。
+- `production` (default) uses the production configuration and outputs.
+- `smoke` creates a small input sample in a separate work directory. `head` takes the first rows, and `random` samples the full input with a fixed seed.
 
-モードを切り替えたら手順4で設定を選び直します。
+After changing modes, rerun step 4 to select the configuration.
 """)
 code("""
 RUN_MODE = 'production'  # 'production' or 'smoke'; select smoke for a small pipeline test.
@@ -50,14 +50,14 @@ if RUN_MODE not in ('smoke', 'production'):
 if SMOKE_SAMPLE_MODE not in ('head', 'random'):
     raise ValueError("SMOKE_SAMPLE_MODE must be 'head' or 'random'")
 """)
-md("## 1. Google Driveを接続する")
+md("## 1. Mount Google Drive")
 code("""
 from google.colab import drive
 drive.mount('/content/drive')
 """)
-md("""## 2. リポジトリを取得・更新する
+md("""## 2. Clone or update the repository
 
-既存のcheckoutは `git pull --ff-only` で更新します。再現実験では `REPO_REF` にコミットSHAまたはタグを指定できます。
+The notebook updates an existing checkout with `git pull --ff-only`. For reproducible runs, set `REPO_REF` to a commit SHA or tag.
 """)
 code("""
 import os
@@ -89,9 +89,9 @@ LAYOUT = ops.path_layout(REPO_DIR)
 print('Python:', sys.version.split()[0])
 print('Commit:', subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip())
 """)
-md("""## 3. 処理用のPython環境を用意する
+md("""## 3. Set up the worker environment
 
-ノートブックのカーネルとは別にPython 3.11の環境を作り、検出したGPUに合わせて依存関係を導入します。ランタイム切り替え後もこの手順を実行します。
+This step creates a Python 3.11 environment separate from the notebook kernel and installs dependencies based on GPU availability. Run it again after switching runtimes.
 """)
 code("""
 gpu = ops.nvidia_gpu()
@@ -113,9 +113,9 @@ WORKER_ENV['MPLBACKEND'] = 'Agg'  # Save figures without inheriting Colab's inli
 print('Notebook kernel:', sys.version.split()[0])
 print('Pipeline worker:', runtime['version'], PIPELINE_PYTHON)
 """)
-md("""## 4. 設定と保存先を確認する
+md("""## 4. Check the configuration and output directory
 
-表示されるモード、設定ファイル、入力、作業先を確認します。本番ではDriveの既存YAMLを再利用します。新規の本番設定はGPU必須の `device: cuda` です。
+Check the displayed run mode, configuration file, input, and work directory. Production runs reuse the existing YAML on Drive. A new production configuration uses `device: cuda` and requires a GPU for scoring.
 """)
 code("""
 CONFIG = LAYOUT[ops.validate_mode(RUN_MODE)]['config']
@@ -144,9 +144,9 @@ def run_stage(stage, *options):
         ops.gpu_preflight(PIPELINE_PYTHON, current, WORKER_ENV)
     return ops.stream_command(command, env=WORKER_ENV)
 """)
-md("""## 4b. 入力と言語判定モデルを準備する
+md("""## 4b. Prepare the input and language identification model
 
-初回フィルタリングの前に実行します。smokeでは入力を抽出し、両モードで入力の存在と設定を確認してfastTextモデルを用意します。
+Run this step before filtering for the first time. In smoke mode, it samples the input. In both modes, it checks the input and configuration and prepares the fastText model.
 """)
 code("""
 config = read_active_config()
@@ -162,44 +162,44 @@ if not Path(config['paths']['input']).is_file():
 run_stage('validate-config')
 run_stage('download-lid')
 """)
-md("""## 5. CPUでフィルタリングする
+md("""## 5. Filter on the CPU
 
-正規化、ルール・発話らしさの判定、完全重複除去まで進めます。完了後にL4へ切り替える場合は、**0〜4 → 6** と進みます。
+Run normalization, rule and speech filtering, and exact deduplication. If you switch to an L4 afterward, run **0–4 → 6**.
 """)
 code("run_stage('run', '--resume', '--until', 'exact-dedup')")
-md("""## 6. スコアリング環境を確認する
+md("""## 6. Check the scoring environment
 
-GPUの検出結果と、処理用Pythonから見えるCUDA・Bicleaner CLIを確認します。`device: cuda` でGPUを使えない場合はここで停止します。
+Check GPU detection and whether CUDA and the Bicleaner CLI are available to the worker. With `device: cuda`, this step stops if the GPU is unavailable.
 """)
 code("""
 config = read_active_config()
 ops.validate_run(RUN_MODE, CONFIG, config, LAYOUT)
 ops.gpu_preflight(PIPELINE_PYTHON, config, WORKER_ENV)
 """)
-md("""## 7. Bicleaner-AIで採点する
+md("""## 7. Score candidates with Bicleaner-AI
 
-候補を採点し、進捗と残り時間の目安を表示します。初回はモデルを取得します。中断後は手順0〜4と6を実行し、ここから再開します。
+Score candidates and display progress and estimated time remaining. The first run downloads the model. After an interruption, run steps 0–4 and 6 before resuming here.
 """)
 code("run_stage('score', '--resume')")
-md("""## 8. 文対を選抜する
+md("""## 8. Select sentence pairs
 
-片側重複を除き、文長区分ごとに選抜します。成果物は作業先の `outputs/selected/selected.parquet` です。
+Remove pairs with duplicate text on either side and select pairs by length bin. The output is `outputs/selected/selected.parquet` under the work directory.
 """)
 code("""
 run_stage('select', '--resume')
 # target_size is saved in the Drive config; changing it preserves inference shards.
 """)
-md("""## 9. 人手確認用のサンプルを作る
+md("""## 9. Sample pairs for manual review
 
-既定で採用500件・不採用200件のCSVを `outputs/audit/` に保存します。
+By default, this step saves CSV samples of 500 accepted and 200 rejected pairs under `outputs/audit/`.
 """)
 code("""
 run_stage('audit', '--resume')
 print('Review:', WORK / 'outputs/audit')
 """)
-md("""## 10. 選抜結果を集計する
+md("""## 10. Summarize selection results
 
-完了済みのチェックポイントから通過件数と分布を集計します。CPUで実行でき、レポートと図は `outputs/stats/` に保存します。
+Use completed checkpoints to summarize stage counts and distributions. This step runs on the CPU and saves the report and figures under `outputs/stats/`.
 """)
 code("""
 config = read_active_config()
@@ -210,18 +210,18 @@ ops.stream_command(command, env=WORKER_ENV)
 from IPython.display import Image, display
 STATS = Path(config['paths']['work_dir']) / 'outputs/stats'
 summary = json.loads((STATS / 'stats.json').read_text(encoding='utf-8'))
-print(f"選抜 {summary['selected_size']:,} / 目標 {summary['target_size']:,} 文対")
-print('レポート', STATS / 'report.md')
+print(f"Selected {summary['selected_size']:,} of {summary['target_size']:,} target pairs")
+print('Report:', STATS / 'report.md')
 for name in ['stage_retention.png', 'selected_ja_length.png', 'selected_en_words.png',
              'selected_bicleaner_scores.png', 'length_bin_comparison.png',
              'candidate_bicleaner_scores.png', 'reject_reasons.png']:
     display(Image(filename=str(STATS / name)))
 """)
-md("""## 11. 学習用JSONLを出力する
+md("""## 11. Export training JSONL
 
-本番の選抜済み30万文対を、元の `pair_id` を保ったまま **train 298,000件・dev 2,000件** に分けます。seedは42です。手順0〜4で本番設定を読み込めば、選抜済みParquetから直接実行できます。
+Split the 300,000 selected production pairs into **298,000 train pairs and 2,000 dev pairs** using seed 42. Each pair retains its original `pair_id`. To export an existing selected Parquet, load the production configuration with steps 0–4 and run this step directly.
 
-`outputs/text-corpus/manifest.jsonl` と `summary.json` をDriveに保存します。
+This step saves `outputs/text-corpus/manifest.jsonl` and `outputs/text-corpus/summary.json` to Drive.
 """)
 code("""
 if RUN_MODE == 'production':
@@ -232,13 +232,13 @@ if RUN_MODE == 'production':
         '--config', str(CONFIG), '--seed', '42',
     ], env=WORKER_ENV)
 else:
-    print('手順11は本番の選抜済み30万文対向けです。')
+    print('Step 11 expects 300,000 selected pairs from a production run.')
 """)
-md("""## 再開と保存
+md("""## Resume and save
 
-切断後は手順0〜4で同じDriveと設定を読み込み、続きの工程を実行します。`--resume` が完了済みのチェックポイントを検証して再利用します。ランタイム終了前にDriveの同期を待ってください。
+After a disconnect, run steps 0–4 with the same Drive and configuration, then continue from the next step. `--resume` validates and reuses completed checkpoints. Wait for Drive to finish syncing before ending the runtime.
 
-成果物はDriveで管理し、ノートブックを共有する際は **編集 → すべての出力を消去** を実行してください。
+Keep outputs on Drive. Use **Edit → Clear all outputs** before sharing the notebook.
 """)
 
 for i, cell in enumerate(cells):
